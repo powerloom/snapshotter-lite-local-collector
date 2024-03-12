@@ -1,0 +1,2 @@
+cd cmd
+go build .
