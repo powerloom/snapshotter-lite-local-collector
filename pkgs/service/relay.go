@@ -36,7 +36,7 @@ func ConfigureRelayer() {
 
 	collectorAddr, err = ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", config.SettingsObj.RelayerId, config.SettingsObj.CollectorId))
 	if err != nil {
-		log.Debugln(err.Error())
+		fmt.Println(err.Error())
 		return
 	}
 
@@ -44,12 +44,12 @@ func ConfigureRelayer() {
 	CollectorId = collectorInfo.ID
 
 	if err != nil {
-		panic(err)
+		fmt.Println(err)
 	}
 
 	if err := rpctorelay.Connect(ctx, *collectorInfo); err != nil {
 		log.Debugln("Failed to connect to the Collector:", err)
 	} else {
-		log.Debugln("Successfully connected to the Collector")
+		log.Debugln("Successfully connected to the Collector: ", collectorAddr.String())
 	}
 }
