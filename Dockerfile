@@ -17,6 +17,7 @@ RUN go mod download
 # EXPOSE 9000
 
 COPY . .
+RUN chmod +x build.sh
 RUN ./build.sh
 
 RUN chmod +x init_processes.sh
