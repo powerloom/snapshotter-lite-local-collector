@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	log "github.com/sirupsen/logrus"
@@ -44,6 +45,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 		err := setNewStream(s)
 		log.Debugln(err)
 	}
+	var submissionId uuid.UUID
 	for {
 		submission, err := stream.Recv()
 
@@ -56,12 +58,17 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 
 		log.Debugln("Received submission with request: ", submission.Request)
 
+		submissionId = uuid.New() // Generates a new UUID
+		submissionIdBytes, err := submissionId.MarshalText()
+
 		subBytes, err := json.Marshal(submission)
+
+		submissionBytes := append(submissionIdBytes, subBytes...)
 		if err != nil {
 			log.Debugln("Could not marshal submission")
 			return err
 		}
-		if _, err = s.stream.Write(subBytes); err != nil {
+		if _, err = s.stream.Write(submissionBytes); err != nil {
 			s.stream.Close()
 			setNewStream(s)
 
@@ -75,7 +82,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			}
 		}
 	}
-	return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
+	return stream.SendAndClose(&pkgs.SubmissionResponse{Message: submissionId.String()})
 }
 
 func (s *server) mustEmbedUnimplementedSubmissionServer() {
