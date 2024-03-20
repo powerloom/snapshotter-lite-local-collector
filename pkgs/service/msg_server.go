@@ -63,6 +63,8 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 
 		subBytes, err := json.Marshal(submission)
 
+		log.Debugln("Sending submmission with ID: ", submissionId.String())
+
 		submissionBytes := append(submissionIdBytes, subBytes...)
 		if err != nil {
 			log.Debugln("Could not marshal submission")
