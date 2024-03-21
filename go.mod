@@ -3,6 +3,7 @@ module proto-snapshot-server
 go 1.20
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/libp2p/go-libp2p v0.32.2
 	github.com/multiformats/go-multiaddr v0.12.2
 	github.com/sirupsen/logrus v1.9.3
