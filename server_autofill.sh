@@ -27,7 +27,7 @@ cp settings.example.json settings.json
 # Replace placeholders in settings.json with actual values from environment variables
 sed -i'.backup' -e "s#COLLECTOR_ID#$COLLECTOR_ID#" \
                 -e "s#RELAYER_ID#$RELAYER_ID#" \
-                -e "s#RELAYER_URL#$RELAYER_URL#"
+                -e "s#RELAYER_URL#$RELAYER_URL#" settings.json
 
 # Cleanup backup file
 rm settings.json.backup
