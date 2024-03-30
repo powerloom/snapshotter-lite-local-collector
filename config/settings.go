@@ -31,7 +31,9 @@ func LoadConfig() {
 	decoder := json.NewDecoder(file)
 	config := Settings{}
 	err = decoder.Decode(&config)
-
+	if err != nil {
+		log.Fatalf("Failed to decode config file: %v", err)
+	}
 	log.Debugln("Read relayer config settings: ", config.RelayerUrl, config.RelayerId, config.CollectorId)
 
 	SettingsObj = &config
