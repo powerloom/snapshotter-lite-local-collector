@@ -50,6 +50,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 		submission, err := stream.Recv()
 
 		if err == io.EOF {
+			log.Debugln("EOF reached")
 			break
 		} else if err != nil {
 			log.Errorln("Grpc server crash ", err.Error())
@@ -82,6 +83,8 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 					break
 				} else {
 					log.Errorln("Collector stream error, retrying: ", err.Error())
+					s.stream.Close()
+					setNewStream(s)
 				}
 			}
 		}
