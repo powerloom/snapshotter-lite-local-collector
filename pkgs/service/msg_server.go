@@ -3,10 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/protocol"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"io"
@@ -28,22 +26,18 @@ func NewMsgServerImpl() pkgs.SubmissionServer {
 	return &server{}
 }
 
-func setNewStream(s *server) error {
-	st, err := rpctorelay.NewStream(network.WithUseTransient(context.Background(), "collect"), CollectorId, protocol.ConvertFromStrings([]string{"/collect"})[0])
+func setNewStream(s *server) {
+	st, err := rpctorelay.NewStream(network.WithUseTransient(context.Background(), "collect"), CollectorId, "/collect")
 
 	if err != nil {
-		log.Debugln(err.Error())
-		return errors.New("unable to establish stream")
+		log.Debugln("unable to establish stream: ", err.Error())
 	}
 	s.stream = st
-
-	return nil
 }
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
 	if s.stream == nil {
-		err := setNewStream(s)
-		log.Debugln(err)
+		setNewStream(s)
 	}
 	var submissionId uuid.UUID
 	for {
