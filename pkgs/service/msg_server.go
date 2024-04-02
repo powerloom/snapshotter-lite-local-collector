@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"proto-snapshot-server/pkgs"
+	"time"
 )
 
 // server is used to implement submission.SubmissionService.
@@ -27,8 +28,9 @@ func NewMsgServerImpl() pkgs.SubmissionServer {
 }
 
 func setNewStream(s *server) {
-	st, err := rpctorelay.NewStream(network.WithUseTransient(context.Background(), "collect"), CollectorId, "/collect")
-
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	st, err := rpctorelay.NewStream(network.WithUseTransient(ctx, "collect"), CollectorId, "/collect")
 	if err != nil {
 		log.Debugln("unable to establish stream: ", err.Error())
 	}
@@ -79,6 +81,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 					log.Errorln("Collector stream error, retrying: ", err.Error())
 					s.stream.Close()
 					setNewStream(s)
+					time.Sleep(time.Second * 5)
 				}
 			}
 		}
