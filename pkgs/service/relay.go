@@ -4,13 +4,18 @@ import (
 	"context"
 	"fmt"
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
+	"github.com/libp2p/go-libp2p/p2p/security/noise"
+	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 	"proto-snapshot-server/config"
+	"time"
 )
 
-var rpctorelay, _ = libp2p.New(libp2p.EnableRelay())
+var rpctorelay host.Host
 var CollectorId peer.ID
 
 func ConfigureRelayer() {
@@ -26,6 +31,21 @@ func ConfigureRelayer() {
 
 	relayerinfo, err := peer.AddrInfoFromP2pAddr(relayAddr)
 	log.Debugln(err)
+
+	connManager, _ := connmgr.NewConnManager(
+		100,
+		400,
+		connmgr.WithGracePeriod(time.Minute))
+
+	rpctorelay, err = libp2p.New(
+		libp2p.EnableRelay(),
+		libp2p.ConnectionManager(connManager),
+		libp2p.Security(libp2ptls.ID, libp2ptls.New),
+		libp2p.Security(noise.ID, noise.New),
+		libp2p.DefaultTransports,
+		libp2p.NATPortMap(),
+		libp2p.EnableRelayService(),
+		libp2p.EnableNATService())
 
 	//Establish connections
 	if err = rpctorelay.Connect(ctx, *relayerinfo); err != nil {
