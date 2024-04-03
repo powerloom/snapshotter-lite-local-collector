@@ -1,5 +1,5 @@
 {
-  "RelayerUrl": "/ip6/::1/udp/60362/quic-v1",
-  "RelayerId": "12D3KooWPWyWS9cYh1PoTYA4JVugGMFCdjjCDU8p87tGyNA8hgGB",
-  "CollectorId": "12D3KooWQj3Q3XZbEsbK6gaTfohk6dLF7foPGL5FzabJhiY6UDz9"
+  "RelayerUrl": "/ip4/10.116.0.11/tcp/9100",
+  "RelayerId": "12D3KooWBS3UokmQFWVUmjoetnRcAuFT1YADGeADgmF5Bo6t9wY8",
+  "CollectorId": "12D3KooWDQnXP8J3SegfNxavr4gc2uCtgXd75nFvTj2wKRGfjMaG"
 }
