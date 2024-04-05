@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/sethvargo/go-retry"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"io"
@@ -26,16 +27,45 @@ var _ pkgs.SubmissionServer = &server{}
 func NewMsgServerImpl() pkgs.SubmissionServer {
 	return &server{}
 }
-
 func setNewStream(s *server) {
+	// Define the backoff strategy - Fibonacci with jitter
+	backoff := retry.NewFibonacci(1 * time.Second)
+
+	backoff = retry.WithMaxRetries(5, backoff)                // Retry up to 5 times
+	backoff = retry.WithJitter(500*time.Millisecond, backoff) // Add jitter
+
+	// Define the operation to retry
+	operation := func(ctx context.Context) error {
+		st, err := rpctorelay.NewStream(network.WithUseTransient(ctx, "collect"), CollectorId, "/collect")
+		if err != nil {
+			log.Debugln("unable to establish stream: ", err.Error())
+			return retry.RetryableError(err) // Mark the error as retryable
+		}
+		s.stream = st
+		return nil
+	}
+
+	// Execute the operation with retry
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	st, err := rpctorelay.NewStream(network.WithUseTransient(ctx, "collect"), CollectorId, "/collect")
-	if err != nil {
-		log.Debugln("unable to establish stream: ", err.Error())
+
+	if err := retry.Do(ctx, backoff, operation); err != nil {
+		log.Debugln("Failed to establish stream after retries: %v", err)
+	} else {
+		log.Debugln("Stream established successfully")
 	}
-	s.stream = st
 }
+
+//
+//func setNewStream(s *server) {
+//	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+//	defer cancel()
+//	st, err := rpctorelay.NewStream(network.WithUseTransient(ctx, "collect"), CollectorId, "/collect")
+//	if err != nil {
+//		log.Debugln("unable to establish stream: ", err.Error())
+//	}
+//	s.stream = st
+//}
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
 	if s.stream == nil {
