@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/libp2p/go-libp2p"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
@@ -47,6 +49,45 @@ func ConfigureRelayer() {
 		libp2p.EnableRelayService(),
 		libp2p.EnableNATService())
 
+	// Set up a Kademlia DHT for the service host
+	kademliaDHT, err := dht.New(context.Background(), rpctorelay)
+	if err != nil {
+		log.Fatalf("Failed to create DHT: %s", err)
+	}
+
+	// Bootstrap the DHT
+	if err = kademliaDHT.Bootstrap(context.Background()); err != nil {
+		log.Fatalf("Failed to bootstrap DHT: %s", err)
+	}
+
+	routingDiscovery := routing.NewRoutingDiscovery(kademliaDHT)
+
+	// Find peers advertising under the same rendezvous string
+	rendezvousString := "powerloom-rendezvous-point-IP"
+	peerChan, err := routingDiscovery.FindPeers(context.Background(), rendezvousString)
+	if err != nil {
+		log.Fatalf("Failed to find peers: %s", err)
+	}
+
+	for peer := range peerChan {
+		if peer.ID == rpctorelay.ID() || len(peer.Addrs) == 0 {
+			// Skip self or peers with no addresses
+			continue
+		}
+
+		fmt.Printf("Found peer: %s\n", peer.ID.String())
+
+		// Connect to the peer
+		if err := rpctorelay.Connect(context.Background(), peer); err != nil {
+			log.Printf("Failed to connect to peer %s: %s", peer.ID.String(), err)
+		} else {
+			config.SettingsObj.RelayerId = peer.ID.String()
+			fmt.Printf("Connected to peer: %s\n", peer.ID.String())
+		}
+	}
+	if err != nil {
+		log.Debugln(err)
+	}
 	//Establish connections
 	if err = rpctorelay.Connect(ctx, *relayerinfo); err != nil {
 		log.Debugln("Failed to connect grpc server to relayer")

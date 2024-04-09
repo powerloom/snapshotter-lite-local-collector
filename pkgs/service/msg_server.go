@@ -100,6 +100,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			return err
 		}
 		if _, err = s.stream.Write(submissionBytes); err != nil {
+			log.Debugln("Stream write error: ", err.Error())
 			s.stream.Close()
 			setNewStream(s)
 
