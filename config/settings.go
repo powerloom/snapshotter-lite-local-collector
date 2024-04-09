@@ -10,14 +10,15 @@ import (
 var SettingsObj *Settings
 
 type Settings struct {
-	RelayerUrl  string `json:"RelayerUrl"`
-	RelayerId   string `json:"RelayerId"`
-	CollectorId string `json:"CollectorId"`
+	RelayerUrl      string `json:"RelayerUrl"`
+	RelayerId       string `json:"RelayerId"`
+	CollectorId     string `json:"CollectorId"`
+	RendezvousPoint string `json:"RendezvousPoint"`
 }
 
 func LoadConfig() {
 	file, err := os.Open(strings.TrimSuffix(os.Getenv("CONFIG_PATH"), "/") + "/config/settings.json")
-	//file, err := os.Open("/Users/mukundrawat/powerloom/proto-snapshot-server/config/settings.json")
+	//file, err := os.Open("/Users/mukundrawat/power2/submission-sequencer/config/settings.json")
 	if err != nil {
 		log.Fatalf("Failed to open config file: %v", err)
 	}

@@ -25,14 +25,6 @@ func ConfigureRelayer() {
 
 	var relayAddr ma.Multiaddr
 	var err error
-	relayAddr, err = ma.NewMultiaddr(fmt.Sprintf("%s/p2p/%s", config.SettingsObj.RelayerUrl, config.SettingsObj.RelayerId))
-	if err != nil {
-		log.Debugln(err.Error())
-		return
-	}
-
-	relayerinfo, err := peer.AddrInfoFromP2pAddr(relayAddr)
-	log.Debugln(err)
 
 	connManager, _ := connmgr.NewConnManager(
 		100,
@@ -63,8 +55,7 @@ func ConfigureRelayer() {
 	routingDiscovery := routing.NewRoutingDiscovery(kademliaDHT)
 
 	// Find peers advertising under the same rendezvous string
-	rendezvousString := "powerloom-rendezvous-point-IP"
-	peerChan, err := routingDiscovery.FindPeers(context.Background(), rendezvousString)
+	peerChan, err := routingDiscovery.FindPeers(context.Background(), config.SettingsObj.RendezvousPoint)
 	if err != nil {
 		log.Fatalf("Failed to find peers: %s", err)
 	}
@@ -88,6 +79,14 @@ func ConfigureRelayer() {
 	if err != nil {
 		log.Debugln(err)
 	}
+	relayAddr, err = ma.NewMultiaddr(fmt.Sprintf("%s/p2p/%s", config.SettingsObj.RelayerUrl, config.SettingsObj.RelayerId))
+	if err != nil {
+		log.Debugln(err.Error())
+		return
+	}
+
+	relayerinfo, err := peer.AddrInfoFromP2pAddr(relayAddr)
+	log.Debugln(err)
 	//Establish connections
 	if err = rpctorelay.Connect(ctx, *relayerinfo); err != nil {
 		log.Debugln("Failed to connect grpc server to relayer")
