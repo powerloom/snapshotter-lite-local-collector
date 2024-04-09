@@ -1,6 +1,4 @@
 {
-  "RelayerUrl": "/ip4/10.116.0.11/tcp/9100",
-  "RelayerId": "12D3KooWBS3UokmQFWVUmjoetnRcAuFT1YADGeADgmF5Bo6t9wY8",
   "CollectorId": "12D3KooWDQnXP8J3SegfNxavr4gc2uCtgXd75nFvTj2wKRGfjMaG",
-  "RendezvoudPoint": "powerloom"
+  "RendezvousPoint": "power-ka-chakkar"
 }

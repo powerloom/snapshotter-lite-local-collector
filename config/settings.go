@@ -10,8 +10,6 @@ import (
 var SettingsObj *Settings
 
 type Settings struct {
-	RelayerUrl      string `json:"RelayerUrl"`
-	RelayerId       string `json:"RelayerId"`
 	CollectorId     string `json:"CollectorId"`
 	RendezvousPoint string `json:"RendezvousPoint"`
 }
@@ -35,7 +33,6 @@ func LoadConfig() {
 	if err != nil {
 		log.Fatalf("Failed to decode config file: %v", err)
 	}
-	log.Debugln("Read relayer config settings: ", config.RelayerUrl, config.RelayerId, config.CollectorId)
 
 	SettingsObj = &config
 }

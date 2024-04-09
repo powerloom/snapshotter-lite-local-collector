@@ -24,7 +24,6 @@ var CollectorId peer.ID
 func ConfigureRelayer() {
 	ctx := context.Background()
 
-	var relayAddr ma.Multiaddr
 	var err error
 
 	connManager, _ := connmgr.NewConnManager(
@@ -76,41 +75,32 @@ func ConfigureRelayer() {
 		log.Fatalf("Failed to find peers: %s", err)
 	}
 
+	var peerId string
+
 	for peer := range peerChan {
 		if peer.ID == rpctorelay.ID() || len(peer.Addrs) == 0 {
 			// Skip self or peers with no addresses
 			continue
 		}
 
-		fmt.Printf("Found peer: %s\n", peer.ID.String())
+		log.Debugf("Found peer: %s/%s\n", peer.Addrs[0], peer.ID.String())
 
 		// Connect to the peer
 		if err := rpctorelay.Connect(context.Background(), peer); err != nil {
 			log.Printf("Failed to connect to peer %s: %s", peer.ID.String(), err)
 		} else {
-			config.SettingsObj.RelayerId = peer.ID.String()
+			if err = rpctorelay.Connect(ctx, peer); err != nil {
+				log.Debugln("Failed to connect grpc server to relayer")
+			}
+			peerId = peer.ID.String()
+
 			fmt.Printf("Connected to peer: %s\n", peer.ID.String())
 		}
-	}
-	if err != nil {
-		log.Debugln(err)
-	}
-	relayAddr, err = ma.NewMultiaddr(fmt.Sprintf("%s/p2p/%s", config.SettingsObj.RelayerUrl, config.SettingsObj.RelayerId))
-	if err != nil {
-		log.Debugln(err.Error())
-		return
-	}
-
-	relayerinfo, err := peer.AddrInfoFromP2pAddr(relayAddr)
-	log.Debugln(err)
-	//Establish connections
-	if err = rpctorelay.Connect(ctx, *relayerinfo); err != nil {
-		log.Debugln("Failed to connect grpc server to relayer")
 	}
 
 	var collectorAddr ma.Multiaddr
 
-	collectorAddr, err = ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", config.SettingsObj.RelayerId, config.SettingsObj.CollectorId))
+	collectorAddr, err = ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.CollectorId))
 	if err != nil {
 		fmt.Println(err.Error())
 		return
