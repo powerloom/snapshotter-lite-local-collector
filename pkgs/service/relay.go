@@ -14,6 +14,7 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 	"proto-snapshot-server/config"
+	"sync"
 	"time"
 )
 
@@ -51,6 +52,21 @@ func ConfigureRelayer() {
 	if err = kademliaDHT.Bootstrap(context.Background()); err != nil {
 		log.Fatalf("Failed to bootstrap DHT: %s", err)
 	}
+
+	var wg sync.WaitGroup
+	for _, peerAddr := range dht.DefaultBootstrapPeers {
+		peerinfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := rpctorelay.Connect(context.Background(), *peerinfo); err != nil {
+				log.Warning(err)
+			} else {
+				log.Debugln("Connection established with bootstrap node:", *peerinfo)
+			}
+		}()
+	}
+	wg.Wait()
 
 	routingDiscovery := routing.NewRoutingDiscovery(kademliaDHT)
 
