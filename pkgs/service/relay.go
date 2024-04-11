@@ -94,7 +94,8 @@ func ConfigureRelayer() {
 			}
 			peerId = peer.ID.String()
 
-			fmt.Printf("Connected to peer: %s\n", peer.ID.String())
+			log.Debugf("Connected to peer: %s\n", peer.ID.String())
+			break
 		}
 	}
 

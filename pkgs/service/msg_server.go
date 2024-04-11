@@ -31,7 +31,7 @@ func setNewStream(s *server) {
 	// Define the backoff strategy - Fibonacci with jitter
 	backoff := retry.NewFibonacci(1 * time.Second)
 
-	backoff = retry.WithMaxRetries(5, backoff)                // Retry up to 5 times
+	backoff = retry.WithMaxRetries(3, backoff)                // Retry up to 3 times
 	backoff = retry.WithJitter(500*time.Millisecond, backoff) // Add jitter
 
 	// Define the operation to retry
@@ -51,6 +51,7 @@ func setNewStream(s *server) {
 
 	if err := retry.Do(ctx, backoff, operation); err != nil {
 		log.Debugln("Failed to establish stream after retries: %v", err)
+		ConfigureRelayer()
 	} else {
 		log.Debugln("Stream established successfully")
 	}
