@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/sethvargo/go-retry"
@@ -10,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"io"
 	"net"
+	"proto-snapshot-server/config"
 	"proto-snapshot-server/pkgs"
 	"time"
 )
@@ -27,7 +30,7 @@ var _ pkgs.SubmissionServer = &server{}
 func NewMsgServerImpl() pkgs.SubmissionServer {
 	return &server{}
 }
-func setNewStream(s *server) {
+func setNewStream(s *server) error {
 	// Define the backoff strategy - Fibonacci with jitter
 	backoff := retry.NewFibonacci(1 * time.Second)
 
@@ -50,27 +53,21 @@ func setNewStream(s *server) {
 	defer cancel()
 
 	if err := retry.Do(ctx, backoff, operation); err != nil {
-		log.Debugln("Failed to establish stream after retries: %v", err)
-		ConfigureRelayer()
+		return errors.New(fmt.Sprintf("Failed to establish stream after retries: %s", err.Error()))
 	} else {
 		log.Debugln("Stream established successfully")
 	}
+	return nil
 }
 
-//
-//func setNewStream(s *server) {
-//	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-//	defer cancel()
-//	st, err := rpctorelay.NewStream(network.WithUseTransient(ctx, "collect"), CollectorId, "/collect")
-//	if err != nil {
-//		log.Debugln("unable to establish stream: ", err.Error())
-//	}
-//	s.stream = st
-//}
-
+func mustSetStream(s *server) {
+	for err := setNewStream(s); err != nil; {
+		ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RendezvousPoint, rpctorelay)
+	}
+}
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
 	if s.stream == nil {
-		setNewStream(s)
+		mustSetStream(s)
 	}
 	var submissionId uuid.UUID
 	for {
@@ -103,7 +100,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 		if _, err = s.stream.Write(submissionBytes); err != nil {
 			log.Debugln("Stream write error: ", err.Error())
 			s.stream.Close()
-			setNewStream(s)
+			mustSetStream(s)
 
 			for i := 0; i < 5; i++ {
 				_, err = s.stream.Write(subBytes)
@@ -112,7 +109,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 				} else {
 					log.Errorln("Collector stream error, retrying: ", err.Error())
 					s.stream.Close()
-					setNewStream(s)
+					mustSetStream(s)
 					time.Sleep(time.Second * 5)
 				}
 			}

@@ -1,5 +1,4 @@
 {
-  "RelayerUrl": "RELAYER_URL",
-  "RelayerId": "RELAYER_ID",
-  "CollectorId": "COLLECTOR_ID"
+  "CollectorId": "COLLECTOR_ID",
+  "RendezvousPoint": "RENDEZVOUS_POINT"
 }

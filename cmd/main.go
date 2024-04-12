@@ -13,6 +13,6 @@ func main() {
 	config.LoadConfig()
 	service.ConfigureRelayer()
 	wg.Add(1)
-	service.StartSubmissionServer(service.NewMsgServerImpl())
+	go service.StartSubmissionServer(service.NewMsgServerImpl())
 	wg.Wait()
 }
