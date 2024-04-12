@@ -31,6 +31,9 @@ func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscove
 				log.Infof("Connected to new relayer: %s", relayer.ID)
 				return relayer.ID
 			}
+		} else {
+			log.Debugln("Already connected to: ", relayer.ID)
+			return relayer.ID
 		}
 	}
 	return peer.ID("")
