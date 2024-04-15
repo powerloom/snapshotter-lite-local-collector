@@ -33,7 +33,7 @@ func NewMsgServerImpl() pkgs.SubmissionServer {
 }
 func setNewStream(s *server) error {
 	// Define the backoff strategy - Fibonacci with jitter
-	backoff := retry.NewFibonacci(1 * time.Second)
+	backoff := retry.NewFibonacci(100 * time.Millisecond)
 
 	backoff = retry.WithMaxRetries(3, backoff)                // Retry up to 3 times
 	backoff = retry.WithJitter(500*time.Millisecond, backoff) // Add jitter

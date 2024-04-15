@@ -45,7 +45,7 @@ func ConfigureRelayer() {
 	kademliaDHT := ConfigureDHT(context.Background(), rpctorelay)
 
 	routingDiscovery = routing.NewRoutingDiscovery(kademliaDHT)
-	peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RendezvousPoint, rpctorelay)
+	peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RendezvousPoint, rpctorelay, nil)
 
 	var collectorAddr ma.Multiaddr
 
