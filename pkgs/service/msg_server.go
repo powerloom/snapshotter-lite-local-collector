@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/sethvargo/go-retry"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -61,10 +62,13 @@ func setNewStream(s *server) error {
 }
 
 func mustSetStream(s *server) {
+	var peers []peer.ID
 	for err := setNewStream(s); err != nil; {
-		ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RendezvousPoint, rpctorelay)
+		peers = append(peers, rpctorelay.ID())
+		ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RendezvousPoint, rpctorelay, peers)
 	}
 }
+
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
 	if s.stream == nil {
 		mustSetStream(s)

@@ -11,7 +11,16 @@ import (
 	"sync"
 )
 
-func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscovery, rendezvousString string, host host.Host) peer.ID {
+func isVisited(id peer.ID, visited []peer.ID) bool {
+	for _, v := range visited {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
+
+func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscovery, rendezvousString string, host host.Host, visited []peer.ID) peer.ID {
 	peerChan, err := routingDiscovery.FindPeers(ctx, rendezvousString)
 	if err != nil {
 		log.Fatalf("Failed to find peers: %s", err)
@@ -19,7 +28,7 @@ func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscove
 	log.Debugln("Triggering periodic relayer relayer discovery")
 
 	for relayer := range peerChan {
-		if relayer.ID == host.ID() || len(relayer.Addrs) == 0 {
+		if relayer.ID == host.ID() || len(relayer.Addrs) == 0 || isVisited(relayer.ID, visited) {
 			continue // Skip self or peers with no addresses
 		}
 
