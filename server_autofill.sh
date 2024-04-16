@@ -4,13 +4,8 @@ set -e
 
 echo 'populating server settings from environment values...';
 
-if [ -z "$RELAYER_URL" ]; then
-    echo "RELAYER_URL not found, please set this in your .env!";
-    exit 1;
-fi
-
-if [ -z "$RELAYER_ID" ]; then
-    echo "RELAYER_ID not found, please set this in your .env!";
+if [ -z "$RENDEZVOUS_POINT" ]; then
+    echo "RENDEZVOUS_POINT not found, please set this in your .env!";
     exit 1;
 fi
 
@@ -26,8 +21,7 @@ cp settings.example.json settings.json
 
 # Replace placeholders in settings.json with actual values from environment variables
 sed -i'.backup' -e "s#COLLECTOR_ID#$COLLECTOR_ID#" \
-                -e "s#RELAYER_ID#$RELAYER_ID#" \
-                -e "s#RELAYER_URL#$RELAYER_URL#" settings.json
+                -e "s#RENDEZVOUS_POINT#$RENDEZVOUS_POINT#" settings.json
 
 # Cleanup backup file
 rm settings.json.backup
