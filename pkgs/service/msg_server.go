@@ -40,7 +40,7 @@ func setNewStream(s *server) error {
 
 	// Define the operation to retry
 	operation := func(ctx context.Context) error {
-		st, err := rpctorelay.NewStream(network.WithUseTransient(ctx, "collect"), CollectorId, "/collect")
+		st, err := rpctorelay.NewStream(network.WithUseTransient(ctx, "collect"), SequencerId, "/collect")
 		if err != nil {
 			log.Debugln("unable to establish stream: ", err.Error())
 			return retry.RetryableError(err) // Mark the error as retryable

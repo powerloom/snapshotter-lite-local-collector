@@ -1,4 +1,4 @@
 {
-  "CollectorId": "COLLECTOR_ID",
+  "SequencerId": "SEQUENCER_ID",
   "RendezvousPoint": "RENDEZVOUS_POINT"
 }

@@ -10,7 +10,7 @@ import (
 var SettingsObj *Settings
 
 type Settings struct {
-	CollectorId     string `json:"CollectorId"`
+	SequencerId     string `json:"SequencerId"`
 	RendezvousPoint string `json:"RendezvousPoint"`
 }
 

@@ -9,8 +9,8 @@ if [ -z "$RENDEZVOUS_POINT" ]; then
     exit 1;
 fi
 
-if [ -z "$COLLECTOR_ID" ]; then
-    echo "COLLECTOR_ID not found, please set this in your .env!";
+if [ -z "$SEQUENCER_ID" ]; then
+    echo "SEQUENCER_ID not found, please set this in your .env!";
     exit 1;
 fi
 
@@ -20,7 +20,7 @@ cd config
 cp settings.example.json settings.json
 
 # Replace placeholders in settings.json with actual values from environment variables
-sed -i'.backup' -e "s#COLLECTOR_ID#$COLLECTOR_ID#" \
+sed -i'.backup' -e "s#SEQUENCER_ID#$SEQUENCER_ID#" \
                 -e "s#RENDEZVOUS_POINT#$RENDEZVOUS_POINT#" settings.json
 
 # Cleanup backup file

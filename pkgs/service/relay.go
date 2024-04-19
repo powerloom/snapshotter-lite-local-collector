@@ -17,7 +17,7 @@ import (
 )
 
 var rpctorelay host.Host
-var CollectorId peer.ID
+var SequencerId peer.ID
 var routingDiscovery *routing.RoutingDiscovery
 
 func ConfigureRelayer() {
@@ -49,14 +49,14 @@ func ConfigureRelayer() {
 
 	var collectorAddr ma.Multiaddr
 
-	collectorAddr, err = ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.CollectorId))
+	collectorAddr, err = ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.SequencerId))
 	if err != nil {
 		fmt.Println(err.Error())
 		return
 	}
 
 	collectorInfo, err := peer.AddrInfoFromP2pAddr(collectorAddr)
-	CollectorId = collectorInfo.ID
+	SequencerId = collectorInfo.ID
 
 	if err != nil {
 		fmt.Println(err)
