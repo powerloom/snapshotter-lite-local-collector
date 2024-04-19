@@ -111,7 +111,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 				if err == nil {
 					break
 				} else {
-					log.Errorln("Collector stream error, retrying: ", err.Error())
+					log.Errorln("Sequencer stream error, retrying: ", err.Error())
 					s.stream.Close()
 					mustSetStream(s)
 					time.Sleep(time.Second * 5)

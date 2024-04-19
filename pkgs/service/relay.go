@@ -47,24 +47,24 @@ func ConfigureRelayer() {
 	routingDiscovery = routing.NewRoutingDiscovery(kademliaDHT)
 	peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RendezvousPoint, rpctorelay, nil)
 
-	var collectorAddr ma.Multiaddr
+	var sequencerAddr ma.Multiaddr
 
-	collectorAddr, err = ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.SequencerId))
+	sequencerAddr, err = ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.SequencerId))
 	if err != nil {
 		fmt.Println(err.Error())
 		return
 	}
 
-	collectorInfo, err := peer.AddrInfoFromP2pAddr(collectorAddr)
-	SequencerId = collectorInfo.ID
+	sequencerInfo, err := peer.AddrInfoFromP2pAddr(sequencerAddr)
+	SequencerId = sequencerInfo.ID
 
 	if err != nil {
 		fmt.Println(err)
 	}
 
-	if err := rpctorelay.Connect(ctx, *collectorInfo); err != nil {
-		log.Debugln("Failed to connect to the Collector:", err)
+	if err := rpctorelay.Connect(ctx, *sequencerInfo); err != nil {
+		log.Debugln("Failed to connect to the Sequencer:", err)
 	} else {
-		log.Debugln("Successfully connected to the Collector: ", collectorAddr.String())
+		log.Debugln("Successfully connected to the Sequencer: ", sequencerAddr.String())
 	}
 }
