@@ -7,6 +7,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	"github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
@@ -45,6 +46,8 @@ func ConfigureRelayer() {
 	kademliaDHT := ConfigureDHT(context.Background(), rpctorelay)
 
 	routingDiscovery = routing.NewRoutingDiscovery(kademliaDHT)
+	util.Advertise(context.Background(), routingDiscovery, config.SettingsObj.ClientRendezvousPoint)
+	time.Sleep(time.Minute)
 	peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RendezvousPoint, rpctorelay, nil)
 
 	var sequencerAddr ma.Multiaddr
