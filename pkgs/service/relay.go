@@ -25,6 +25,7 @@ func ConfigureRelayer() {
 	ctx := context.Background()
 
 	var err error
+	tcpAddr, _ := ma.NewMultiaddr("/ip4/0.0.0.0/tcp/9100")
 
 	connManager, _ := connmgr.NewConnManager(
 		100,
@@ -34,12 +35,14 @@ func ConfigureRelayer() {
 	rpctorelay, err = libp2p.New(
 		libp2p.EnableRelay(),
 		libp2p.ConnectionManager(connManager),
+		libp2p.ListenAddrs(tcpAddr),
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.DefaultTransports,
 		libp2p.NATPortMap(),
 		libp2p.EnableRelayService(),
-		libp2p.EnableNATService())
+		libp2p.EnableNATService(),
+		libp2p.EnableHolePunching())
 
 	// Set up a Kademlia DHT for the service host
 
