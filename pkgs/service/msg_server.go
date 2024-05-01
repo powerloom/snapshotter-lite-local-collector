@@ -57,7 +57,7 @@ func mustSetStream(s *server) {
 	var peers []peer.ID
 	for err := setNewStream(s); err != nil; {
 		peers = append(peers, rpctorelay.ID())
-		ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RendezvousPoint, rpctorelay, peers)
+		ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, peers)
 	}
 }
 
