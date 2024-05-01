@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
@@ -21,6 +22,16 @@ var rpctorelay host.Host
 var SequencerId peer.ID
 var routingDiscovery *routing.RoutingDiscovery
 
+var activeConnections int
+
+func handleConnectionEstablished(network network.Network, conn network.Conn) {
+	activeConnections++
+}
+
+func handleConnectionClosed(network network.Network, conn network.Conn) {
+	activeConnections--
+}
+
 func ConfigureRelayer() {
 	ctx := context.Background()
 
@@ -30,7 +41,7 @@ func ConfigureRelayer() {
 	connManager, _ := connmgr.NewConnManager(
 		100,
 		400,
-		connmgr.WithGracePeriod(time.Minute))
+		connmgr.WithGracePeriod(5*time.Second))
 
 	rpctorelay, err = libp2p.New(
 		libp2p.EnableRelay(),
@@ -43,6 +54,12 @@ func ConfigureRelayer() {
 		libp2p.EnableRelayService(),
 		libp2p.EnableNATService(),
 		libp2p.EnableHolePunching())
+
+	log.Debugln("id: ", rpctorelay.ID().String())
+	rpctorelay.Network().Notify(&network.NotifyBundle{
+		ConnectedF:    handleConnectionEstablished,
+		DisconnectedF: handleConnectionClosed,
+	})
 
 	// Set up a Kademlia DHT for the service host
 
