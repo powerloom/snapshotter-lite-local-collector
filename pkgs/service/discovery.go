@@ -25,7 +25,7 @@ func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscove
 	if err != nil {
 		log.Fatalf("Failed to find peers: %s", err)
 	}
-	log.Debugln("Triggering periodic relayer relayer discovery")
+	log.Debugln("Triggering peer discovery")
 
 	for relayer := range peerChan {
 		if relayer.ID == host.ID() || len(relayer.Addrs) == 0 || isVisited(relayer.ID, visited) {
@@ -45,6 +45,7 @@ func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscove
 			return relayer.ID
 		}
 	}
+	log.Debugln("Active connections: ", activeConnections)
 	return peer.ID("")
 }
 
