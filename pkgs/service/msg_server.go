@@ -55,6 +55,16 @@ func setNewStream(s *server) error {
 
 func mustSetStream(s *server) {
 	var peers []peer.ID
+	var err error
+	operation := func() error {
+		err = setNewStream(s)
+		if err != nil {
+			peers = append(peers, rpctorelay.ID())
+			ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, peers)
+		}
+		return err
+	}
+	backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 5))
 	for err := setNewStream(s); err != nil; {
 		peers = append(peers, rpctorelay.ID())
 		ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, peers)
