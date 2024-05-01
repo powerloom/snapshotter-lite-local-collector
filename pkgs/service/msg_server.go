@@ -65,10 +65,6 @@ func mustSetStream(s *server) {
 		return err
 	}
 	backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 5))
-	for err := setNewStream(s); err != nil; {
-		peers = append(peers, rpctorelay.ID())
-		ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, peers)
-	}
 }
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
