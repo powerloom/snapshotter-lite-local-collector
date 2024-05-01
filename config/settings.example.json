@@ -1,4 +1,5 @@
 {
   "SequencerId": "SEQUENCER_ID",
-  "RendezvousPoint": "RENDEZVOUS_POINT"
+  "RelayerRendezvousPoint": "RELAYER_RENDEZVOUS_POINT",
+  "ClientRendezvousPoint": "CLIENT_RENDEZVOUS_POINT"
 }
