@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -32,15 +33,8 @@ func NewMsgServerImpl() pkgs.SubmissionServer {
 	return &server{}
 }
 func setNewStream(s *server) error {
-	// Define the backoff strategy - Fibonacci with jitter
-	backoff := retry.NewFibonacci(100 * time.Millisecond)
-
-	backoff = retry.WithMaxRetries(3, backoff)                // Retry up to 3 times
-	backoff = retry.WithJitter(500*time.Millisecond, backoff) // Add jitter
-
-	// Define the operation to retry
-	operation := func(ctx context.Context) error {
-		st, err := rpctorelay.NewStream(network.WithUseTransient(ctx, "collect"), SequencerId, "/collect")
+	operation := func() error {
+		st, err := rpctorelay.NewStream(network.WithUseTransient(context.Background(), "collect"), SequencerId, "/collect")
 		if err != nil {
 			log.Debugln("unable to establish stream: ", err.Error())
 			return retry.RetryableError(err) // Mark the error as retryable
@@ -49,11 +43,9 @@ func setNewStream(s *server) error {
 		return nil
 	}
 
-	// Execute the operation with retry
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	if err := retry.Do(ctx, backoff, operation); err != nil {
+	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = time.Second
+	if err := backoff.Retry(operation, backoff.WithMaxRetries(bo, 5)); err != nil {
 		return errors.New(fmt.Sprintf("Failed to establish stream after retries: %s", err.Error()))
 	} else {
 		log.Debugln("Stream established successfully")
