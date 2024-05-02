@@ -45,7 +45,7 @@ func setNewStream(s *server) error {
 
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = time.Second
-	if err := backoff.Retry(operation, backoff.WithMaxRetries(bo, 5)); err != nil {
+	if err := backoff.Retry(operation, backoff.WithMaxRetries(bo, 3)); err != nil {
 		return errors.New(fmt.Sprintf("Failed to establish stream after retries: %s", err.Error()))
 	} else {
 		log.Debugln("Stream established successfully")
@@ -55,16 +55,22 @@ func setNewStream(s *server) error {
 
 func mustSetStream(s *server) {
 	var peers []peer.ID
+	var connectedPeer peer.ID
 	var err error
 	operation := func() error {
 		err = setNewStream(s)
 		if err != nil {
-			peers = append(peers, rpctorelay.ID())
-			ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, peers)
+			log.Errorln(err.Error())
+			connectedPeer = ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, peers)
+			if len(connectedPeer.String()) > 0 {
+				peers = append(peers)
+			} else {
+				return nil
+			}
 		}
 		return err
 	}
-	backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 5))
+	backoff.Retry(operation, backoff.NewExponentialBackOff())
 }
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
