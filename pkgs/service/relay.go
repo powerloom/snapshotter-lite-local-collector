@@ -31,6 +31,7 @@ func handleConnectionEstablished(network network.Network, conn network.Conn) {
 }
 
 func handleConnectionClosed(network network.Network, conn network.Conn) {
+	log.Debugln("Connection closed: ", conn.RemotePeer().String())
 	activeConnections--
 }
 
