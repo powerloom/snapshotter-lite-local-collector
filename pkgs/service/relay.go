@@ -9,6 +9,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
@@ -33,27 +35,50 @@ func handleConnectionClosed(network network.Network, conn network.Conn) {
 }
 
 func ConfigureRelayer() {
-	ctx := context.Background()
-
 	var err error
-	tcpAddr, _ := ma.NewMultiaddr("/ip4/0.0.0.0/tcp/9100")
 
 	connManager, _ := connmgr.NewConnManager(
 		100,
 		400,
 		connmgr.WithGracePeriod(5*time.Second))
 
+	scalingLimits := rcmgr.DefaultLimits
+
+	libp2p.SetDefaultServiceLimits(&scalingLimits)
+
+	scaledDefaultLimits := scalingLimits.AutoScale()
+
+	cfg := rcmgr.PartialLimitConfig{
+		System: rcmgr.ResourceLimits{
+			Streams:         rcmgr.Unlimited,
+			StreamsOutbound: rcmgr.Unlimited,
+			StreamsInbound:  rcmgr.Unlimited,
+			Conns:           rcmgr.Unlimited,
+			ConnsInbound:    rcmgr.Unlimited,
+			ConnsOutbound:   rcmgr.Unlimited,
+			FD:              rcmgr.Unlimited,
+			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
+		},
+	}
+
+	limits := cfg.Build(scaledDefaultLimits)
+
+	limiter := rcmgr.NewFixedLimiter(limits)
+
+	rm, err := rcmgr.NewResourceManager(limiter, rcmgr.WithMetricsDisabled())
+
 	rpctorelay, err = libp2p.New(
 		libp2p.EnableRelay(),
 		libp2p.ConnectionManager(connManager),
-		libp2p.ListenAddrs(tcpAddr),
+		libp2p.ResourceManager(rm),
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.DefaultTransports,
 		libp2p.NATPortMap(),
 		libp2p.EnableRelayService(),
 		libp2p.EnableNATService(),
-		libp2p.EnableHolePunching())
+		libp2p.EnableHolePunching(),
+		libp2p.Muxer(yamux.ID, yamux.DefaultTransport))
 
 	log.Debugln("id: ", rpctorelay.ID().String())
 	rpctorelay.Network().Notify(&network.NotifyBundle{
@@ -87,7 +112,7 @@ func ConfigureRelayer() {
 		fmt.Println(err)
 	}
 
-	if err := rpctorelay.Connect(ctx, *sequencerInfo); err != nil {
+	if err := rpctorelay.Connect(context.Background(), *sequencerInfo); err != nil {
 		log.Debugln("Failed to connect to the Sequencer:", err)
 	} else {
 		log.Debugln("Successfully connected to the Sequencer: ", sequencerAddr.String())
