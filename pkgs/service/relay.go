@@ -36,11 +36,12 @@ func handleConnectionClosed(network network.Network, conn network.Conn) {
 
 func ConfigureRelayer() {
 	var err error
+	tcpAddr, _ := ma.NewMultiaddr("/ip4/0.0.0.0/tcp/9000")
 
 	connManager, _ := connmgr.NewConnManager(
 		100,
 		400,
-		connmgr.WithGracePeriod(5*time.Second))
+		connmgr.WithGracePeriod(5*time.Minute))
 
 	scalingLimits := rcmgr.DefaultLimits
 
@@ -70,6 +71,7 @@ func ConfigureRelayer() {
 	rpctorelay, err = libp2p.New(
 		libp2p.EnableRelay(),
 		libp2p.ConnectionManager(connManager),
+		libp2p.ListenAddrs(tcpAddr),
 		libp2p.ResourceManager(rm),
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 		libp2p.Security(noise.ID, noise.New),
@@ -79,6 +81,11 @@ func ConfigureRelayer() {
 		libp2p.EnableNATService(),
 		libp2p.EnableHolePunching(),
 		libp2p.Muxer(yamux.ID, yamux.DefaultTransport))
+
+	if err != nil {
+		log.Debugln("Error instantiating libp2p host: ", err.Error())
+		return
+	}
 
 	log.Debugln("id: ", rpctorelay.ID().String())
 	rpctorelay.Network().Notify(&network.NotifyBundle{
