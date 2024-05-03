@@ -9,6 +9,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	log "github.com/sirupsen/logrus"
 	"sync"
+	"time"
 )
 
 func isVisited(id peer.ID, visited []peer.ID) bool {
@@ -20,12 +21,15 @@ func isVisited(id peer.ID, visited []peer.ID) bool {
 	return false
 }
 
-func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscovery, rendezvousString string, host host.Host, visited []peer.ID) peer.ID {
+func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscovery, rendezvousString string, host host.Host, visited []peer.ID, delay ...time.Duration) peer.ID {
 	peerChan, err := routingDiscovery.FindPeers(ctx, rendezvousString)
 	if err != nil {
 		log.Fatalf("Failed to find peers: %s", err)
 	}
 	log.Debugln("Triggering peer discovery")
+	if delay != nil {
+		time.Sleep(delay[0])
+	}
 
 	for relayer := range peerChan {
 		if relayer.ID == host.ID() || len(relayer.Addrs) == 0 || isVisited(relayer.ID, visited) {

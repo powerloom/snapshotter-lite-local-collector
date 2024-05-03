@@ -101,8 +101,7 @@ func ConfigureRelayer() {
 
 	util.Advertise(context.Background(), routingDiscovery, config.SettingsObj.ClientRendezvousPoint)
 
-	time.Sleep(2 * time.Minute)
-	peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, nil)
+	peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, nil, 2*time.Minute)
 
 	ConnectToSequencer(peerId)
 }
