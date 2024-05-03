@@ -104,9 +104,11 @@ func ConfigureRelayer() {
 	time.Sleep(2 * time.Minute)
 	peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, nil)
 
-	var sequencerAddr ma.Multiaddr
+	ConnectToSequencer(peerId)
+}
 
-	sequencerAddr, err = ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.SequencerId))
+func ConnectToSequencer(peerId peer.ID) {
+	sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.SequencerId))
 	if err != nil {
 		fmt.Println(err.Error())
 		return
