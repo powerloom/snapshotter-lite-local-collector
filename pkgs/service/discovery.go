@@ -32,7 +32,7 @@ func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscove
 	}
 
 	for relayer := range peerChan {
-		if relayer.ID == host.ID() || len(relayer.Addrs) == 0 || isVisited(relayer.ID, visited) {
+		if relayer.ID == host.ID() || isVisited(relayer.ID, visited) {
 			continue // Skip self or peers with no addresses
 		}
 
