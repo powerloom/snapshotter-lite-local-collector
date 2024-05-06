@@ -109,19 +109,27 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 		if _, err = s.stream.Write(submissionBytes); err != nil {
 			log.Debugln("Stream write error: ", err.Error())
 			s.stream.Close()
+			ConnectToSequencer(rpctorelay.ID())
 			mustSetStream(s)
 
-			for i := 0; i < 5; i++ {
+			backoff.Retry(func() error {
 				_, err = s.stream.Write(subBytes)
-				if err == nil {
-					break
-				} else {
+				if err != nil {
 					log.Errorln("Sequencer stream error, retrying: ", err.Error())
-					s.stream.Close()
-					mustSetStream(s)
-					time.Sleep(time.Second * 5)
 				}
-			}
+				return err
+			}, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 5))
+			//for i := 0; i < 5; i++ {
+			//	_, err = s.stream.Write(subBytes)
+			//	if err == nil {
+			//		break
+			//	} else {
+			//		log.Errorln("Sequencer stream error, retrying: ", err.Error())
+			//		s.stream.Close()
+			//		mustSetStream(s)
+			//		time.Sleep(time.Second * 5)
+			//	}
+			//}
 		}
 	}
 	return stream.SendAndClose(&pkgs.SubmissionResponse{Message: submissionId.String()})
