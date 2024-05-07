@@ -45,7 +45,7 @@ func setNewStream(s *server) error {
 
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = time.Second
-	if err := backoff.Retry(operation, backoff.WithMaxRetries(bo, 3)); err != nil {
+	if err := backoff.Retry(operation, backoff.WithMaxRetries(bo, 2)); err != nil {
 		return errors.New(fmt.Sprintf("Failed to establish stream after retries: %s", err.Error()))
 	} else {
 		log.Debugln("Stream established successfully")
@@ -118,7 +118,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 					log.Errorln("Sequencer stream error, retrying: ", err.Error())
 				}
 				return err
-			}, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 5))
+			}, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 2))
 			//for i := 0; i < 5; i++ {
 			//	_, err = s.stream.Write(subBytes)
 			//	if err == nil {
