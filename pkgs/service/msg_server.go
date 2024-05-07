@@ -37,6 +37,7 @@ func setNewStream(s *server) error {
 		st, err := rpctorelay.NewStream(network.WithUseTransient(context.Background(), "collect"), SequencerId, "/collect")
 		if err != nil {
 			log.Debugln("unable to establish stream: ", err.Error())
+			ConnectToSequencer(rpctorelay.ID())
 			return retry.RetryableError(err) // Mark the error as retryable
 		}
 		s.stream = st
@@ -76,6 +77,7 @@ func mustSetStream(s *server) {
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
 	if s.stream == nil || s.stream.Conn().IsClosed() {
+		ConnectToSequencer(rpctorelay.ID())
 		mustSetStream(s)
 	}
 	var submissionId uuid.UUID
