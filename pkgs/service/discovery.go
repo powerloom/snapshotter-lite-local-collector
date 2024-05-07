@@ -31,6 +31,8 @@ func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscove
 		time.Sleep(delay[0])
 	}
 
+	log.Debugln("Skipping visited peers: ", visited)
+
 	for relayer := range peerChan {
 		if relayer.ID == host.ID() || isVisited(relayer.ID, visited) {
 			continue // Skip self or peers with no addresses
