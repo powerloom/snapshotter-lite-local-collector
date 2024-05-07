@@ -75,7 +75,7 @@ func mustSetStream(s *server) {
 }
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
-	if s.stream == nil {
+	if s.stream == nil || s.stream.Conn().IsClosed() {
 		mustSetStream(s)
 	}
 	var submissionId uuid.UUID
