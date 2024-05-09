@@ -13,11 +13,12 @@ type Settings struct {
 	SequencerId            string `json:"SequencerId"`
 	RelayerRendezvousPoint string `json:"RelayerRendezvousPoint"`
 	ClientRendezvousPoint  string `json:"ClientRendezvousPoint"`
+	DashboardEnabled       string `json:"DashboardEnabled"`
 }
 
 func LoadConfig() {
 	file, err := os.Open(strings.TrimSuffix(os.Getenv("CONFIG_PATH"), "/") + "/config/settings.json")
-	//file, err := os.Open("/Users/mukundrawat/power2/submission-sequencer/config/settings.json")
+	// file, err := os.Open("/Users/sulejmansarajlija/IdeaProjects/powerloom/snapshotter_lite_exp/submission-sequencer/config/settings.json")
 	if err != nil {
 		log.Fatalf("Failed to open config file: %v", err)
 	}

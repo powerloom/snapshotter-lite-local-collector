@@ -25,7 +25,8 @@ cp settings.example.json settings.json
 # Replace placeholders in settings.json with actual values from environment variables
 sed -i'.backup' -e "s#SEQUENCER_ID#$SEQUENCER_ID#" \
                 -e "s#RELAYER_RENDEZVOUS_POINT#$RELAYER_RENDEZVOUS_POINT#" \
-                -e "s#CLIENT_RENDEZVOUS_POINT#$CLIENT_RENDEZVOUS_POINT#" settings.json
+                -e "s#CLIENT_RENDEZVOUS_POINT#$CLIENT_RENDEZVOUS_POINT#" \
+                -e "s#DASHBOARD_ENABLED#$DASHBOARD_ENABLED#" settings.json
 
 # Cleanup backup file
 rm settings.json.backup

@@ -1,4 +1,6 @@
 {
-  "CollectorId": "12D3KooWDQnXP8J3SegfNxavr4gc2uCtgXd75nFvTj2wKRGfjMaG",
-  "RendezvousPoint": "powerloom"
+  "SequencerId": "SEQUENCER_ID",
+  "RelayerRendezvousPoint": "RELAYER_RENDEZVOUS_POINT",
+  "ClientRendezvousPoint": "CLIENT_RENDEZVOUS_POINT",
+  "DashboardEnabled": "true"
 }
