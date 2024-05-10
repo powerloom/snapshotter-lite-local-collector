@@ -22,11 +22,14 @@ cd config
 # Template to actual settings.json manipulation
 cp settings.example.json settings.json
 
+RELAYER_PRIVATE_KEY=$(cat /config/key.txt)
+
 # Replace placeholders in settings.json with actual values from environment variables
 sed -i'.backup' -e "s#SEQUENCER_ID#$SEQUENCER_ID#" \
                 -e "s#RELAYER_RENDEZVOUS_POINT#$RELAYER_RENDEZVOUS_POINT#" \
                 -e "s#CLIENT_RENDEZVOUS_POINT#$CLIENT_RENDEZVOUS_POINT#" \
-                -e "s#DASHBOARD_ENABLED#$DASHBOARD_ENABLED#" settings.json
+                -e "s#DASHBOARD_ENABLED#$DASHBOARD_ENABLED#" \
+                -e "s#RELAYER_PRIVATE_KEY#$RELAYER_PRIVATE_KEY#" settings.json
 
 # Cleanup backup file
 rm settings.json.backup

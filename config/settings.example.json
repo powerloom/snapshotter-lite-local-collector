@@ -2,5 +2,6 @@
   "SequencerId": "SEQUENCER_ID",
   "RelayerRendezvousPoint": "RELAYER_RENDEZVOUS_POINT",
   "ClientRendezvousPoint": "CLIENT_RENDEZVOUS_POINT",
-  "DashboardEnabled" : "DASHBOARD_ENABLED"
+  "DashboardEnabled" : "DASHBOARD_ENABLED",
+  "RelayerPrivateKey": "RELAYER_PRIVATE_KEY"
 }

@@ -14,6 +14,7 @@ type Settings struct {
 	RelayerRendezvousPoint string `json:"RelayerRendezvousPoint"`
 	ClientRendezvousPoint  string `json:"ClientRendezvousPoint"`
 	DashboardEnabled       string `json:"DashboardEnabled"`
+	RelayerPrivateKey      string `json:"RelayerPrivateKey"`
 }
 
 func LoadConfig() {
