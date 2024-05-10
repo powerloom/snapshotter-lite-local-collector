@@ -52,7 +52,7 @@ func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscove
 		}
 	}
 	log.Debugln("Active connections: ", activeConnections)
-	return peer.ID("")
+	return ""
 }
 
 func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {

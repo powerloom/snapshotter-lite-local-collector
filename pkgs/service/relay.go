@@ -107,18 +107,22 @@ func ConfigureRelayer() {
 }
 
 func ConnectToSequencer(peerId peer.ID) {
+	if peerId == "" {
+		log.Debugln("Not connected to a relayer, establishing connection")
+	}
 	sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.SequencerId))
 	if err != nil {
-		fmt.Println(err.Error())
+		log.Debugln(err.Error())
 		return
 	}
 
 	sequencerInfo, err := peer.AddrInfoFromP2pAddr(sequencerAddr)
-	SequencerId = sequencerInfo.ID
 
 	if err != nil {
-		fmt.Println(err)
+		log.Errorln("Error converting MultiAddr to AddrInfo: ", err.Error())
 	}
+
+	SequencerId = sequencerInfo.ID
 
 	if err := rpctorelay.Connect(context.Background(), *sequencerInfo); err != nil {
 		log.Debugln("Failed to connect to the Sequencer:", err)

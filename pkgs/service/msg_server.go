@@ -54,6 +54,7 @@ func setNewStream(s *server) error {
 	return nil
 }
 
+// TODO: Maintain a global list of visited peers and continue connection establishment from the last accepted peer; refresh the list only when all the peers have been visited
 func mustSetStream(s *server) {
 	var peers []peer.ID
 	var connectedPeer peer.ID
@@ -67,12 +68,12 @@ func mustSetStream(s *server) {
 				peers = append(peers)
 				ConnectToSequencer(connectedPeer)
 			} else {
-				return nil
+				return errors.New("No peer connections formed")
 			}
 		}
 		return err
 	}
-	backoff.Retry(operation, backoff.NewExponentialBackOff())
+	backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 7))
 }
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
