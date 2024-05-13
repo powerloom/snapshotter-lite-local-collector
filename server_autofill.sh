@@ -22,7 +22,15 @@ cd config
 # Template to actual settings.json manipulation
 cp settings.example.json settings.json
 
-RELAYER_PRIVATE_KEY=$(cat /config/key.txt)
+priv_key="/keys/key.txt"
+
+if [[ -f "$priv_key" ]]; then
+    RELAYER_PRIVATE_KEY=$(cat "$priv_key")
+else
+    RELAYER_PRIVATE_KEY=""
+fi
+
+export RELAYER_PRIVATE_KEY
 
 # Replace placeholders in settings.json with actual values from environment variables
 sed -i'.backup' -e "s#SEQUENCER_ID#$SEQUENCER_ID#" \

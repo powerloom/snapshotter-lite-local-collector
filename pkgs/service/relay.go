@@ -175,7 +175,7 @@ func generateAndSaveKey() (crypto.PrivKey, error) {
 		return nil, err
 	}
 	encodedKey := PrivateKeyToString(priv)
-	err = os.WriteFile("/config/key.txt", []byte(encodedKey), 0644)
+	err = os.WriteFile("/keys/key.txt", []byte(encodedKey), 0644)
 	if err != nil {
 		log.Fatal(err)
 	}
