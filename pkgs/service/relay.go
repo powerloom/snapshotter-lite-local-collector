@@ -17,9 +17,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	ma "github.com/multiformats/go-multiaddr"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
-	"net/http"
 	"os"
 	"proto-snapshot-server/config"
 	"time"
@@ -113,16 +111,6 @@ func ConfigureRelayer() {
 	if err != nil {
 		log.Debugln("Error instantiating libp2p host: ", err.Error())
 		return
-	}
-
-	log.Debugln("DashboardsEnabled: ", config.SettingsObj.DashboardEnabled)
-
-	if config.SettingsObj.DashboardEnabled == "true" {
-		log.Debugln("Starting Prometheus metrics server")
-		go func() {
-			http.Handle("/debug/metrics/prometheus", promhttp.Handler())
-			log.Fatal(http.ListenAndServe(":5002", nil))
-		}()
 	}
 
 	log.Debugln("id: ", rpctorelay.ID().String())

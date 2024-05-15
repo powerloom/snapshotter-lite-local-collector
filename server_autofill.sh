@@ -36,7 +36,6 @@ export RELAYER_PRIVATE_KEY
 sed -i'.backup' -e "s#SEQUENCER_ID#$SEQUENCER_ID#" \
                 -e "s#RELAYER_RENDEZVOUS_POINT#$RELAYER_RENDEZVOUS_POINT#" \
                 -e "s#CLIENT_RENDEZVOUS_POINT#$CLIENT_RENDEZVOUS_POINT#" \
-                -e "s#DASHBOARD_ENABLED#$DASHBOARD_ENABLED#" \
                 -e "s#RELAYER_PRIVATE_KEY#$RELAYER_PRIVATE_KEY#" settings.json
 
 # Cleanup backup file

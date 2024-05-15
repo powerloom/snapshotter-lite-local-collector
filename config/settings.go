@@ -13,7 +13,6 @@ type Settings struct {
 	SequencerId            string `json:"SequencerId"`
 	RelayerRendezvousPoint string `json:"RelayerRendezvousPoint"`
 	ClientRendezvousPoint  string `json:"ClientRendezvousPoint"`
-	DashboardEnabled       string `json:"DashboardEnabled"`
 	RelayerPrivateKey      string `json:"RelayerPrivateKey"`
 }
 
