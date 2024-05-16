@@ -16,6 +16,7 @@ import (
 	"net"
 	"proto-snapshot-server/config"
 	"proto-snapshot-server/pkgs"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,7 @@ type server struct {
 }
 
 var _ pkgs.SubmissionServer = &server{}
+var mu sync.Mutex
 
 // NewMsgServerImpl returns an implementation of the SubmissionService interface
 // for the provided Keeper.
@@ -76,11 +78,17 @@ func mustSetStream(s *server) {
 	backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 7))
 }
 
+func TryConnection(s *server) {
+	ConnectToSequencer(rpctorelay.ID())
+	mustSetStream(s)
+}
+
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
+	mu.Lock()
 	if s.stream == nil || s.stream.Conn().IsClosed() {
-		ConnectToSequencer(rpctorelay.ID())
-		mustSetStream(s)
+		TryConnection(s)
 	}
+	mu.Unlock()
 	var submissionId uuid.UUID
 	for {
 		submission, err := stream.Recv()
@@ -112,8 +120,10 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 		if _, err = s.stream.Write(submissionBytes); err != nil {
 			log.Debugln("Stream write error: ", err.Error())
 			s.stream.Close()
-			ConnectToSequencer(rpctorelay.ID())
-			mustSetStream(s)
+
+			mu.Lock()
+			TryConnection(s)
+			mu.Unlock()
 
 			backoff.Retry(func() error {
 				_, err = s.stream.Write(subBytes)
@@ -122,17 +132,6 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 				}
 				return err
 			}, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 2))
-			//for i := 0; i < 5; i++ {
-			//	_, err = s.stream.Write(subBytes)
-			//	if err == nil {
-			//		break
-			//	} else {
-			//		log.Errorln("Sequencer stream error, retrying: ", err.Error())
-			//		s.stream.Close()
-			//		mustSetStream(s)
-			//		time.Sleep(time.Second * 5)
-			//	}
-			//}
 		}
 	}
 	return stream.SendAndClose(&pkgs.SubmissionResponse{Message: submissionId.String()})

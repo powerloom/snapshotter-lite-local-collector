@@ -42,8 +42,8 @@ func ConfigureRelayer() {
 	tcpAddr, _ := ma.NewMultiaddr("/ip4/0.0.0.0/tcp/9000")
 
 	connManager, _ := connmgr.NewConnManager(
-		100,
-		400,
+		40960,
+		81920,
 		connmgr.WithGracePeriod(5*time.Minute))
 
 	scalingLimits := rcmgr.DefaultLimits
