@@ -85,6 +85,7 @@ func TryConnection(s *server) {
 }
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
+	defer stream.Context().Done()
 	mu.Lock()
 	if s.stream == nil || s.stream.Conn().IsClosed() {
 		TryConnection(s)
@@ -132,13 +133,21 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			TryConnection(s)
 			mu.Unlock()
 
-			backoff.Retry(func() error {
+			err = backoff.Retry(func() error {
 				_, err = s.stream.Write(subBytes)
 				if err != nil {
 					log.Errorln("Sequencer stream error, retrying: ", err.Error())
 				}
 				return err
 			}, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 2))
+			if err != nil {
+				stream.Send(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
+				log.Errorln("Failed to write to stream: ", err.Error())
+				return err
+			} else {
+				stream.Send(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()})
+				log.Debugln("Stream write successful")
+			}
 		}
 		stream.Send(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()})
 	}
