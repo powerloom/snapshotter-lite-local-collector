@@ -37,7 +37,7 @@ func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscove
 
 		if host.Network().Connectedness(relayer.ID) != network.Connected {
 			// Connect to the relayer if not already connected
-			if err = backoff.Retry(func() error { return host.Connect(ctx, relayer) }, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 3)); err != nil {
+			if err = backoff.Retry(func() error { return host.Connect(ctx, relayer) }, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 2)); err != nil {
 				log.Errorf("Failed to connect to relayer %s: %s", relayer.ID, err)
 			} else {
 				log.Infof("Connected to new relayer: %s", relayer.ID)
