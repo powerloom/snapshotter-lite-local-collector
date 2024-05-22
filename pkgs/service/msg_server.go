@@ -16,6 +16,7 @@ import (
 	"net"
 	"proto-snapshot-server/config"
 	"proto-snapshot-server/pkgs"
+	"strings"
 	"sync"
 	"time"
 )
@@ -93,12 +94,18 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 	for {
 		submission, err := stream.Recv()
 
-		if err == io.EOF {
-			log.Debugln("EOF reached")
-			break
-		} else if err != nil {
-			log.Errorln("Grpc server crash ", err.Error())
-			return err
+		if err != nil {
+			switch {
+			case err == io.EOF:
+				log.Debugln("EOF reached")
+			case strings.Contains(err.Error(), "context canceled"):
+				log.Errorln("Stream ended by client: ")
+			default:
+				log.Errorln("Unexpected stream error: ", err.Error())
+				return err
+			}
+
+			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
 		}
 
 		log.Debugln("Received submission with request: ", submission.Request)
@@ -134,7 +141,6 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			}, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 2))
 		}
 	}
-	return stream.SendAndClose(&pkgs.SubmissionResponse{Message: submissionId.String()})
 }
 
 func (s *server) mustEmbedUnimplementedSubmissionServer() {
