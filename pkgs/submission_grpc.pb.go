@@ -48,7 +48,7 @@ func (c *submissionClient) SubmitSnapshot(ctx context.Context, opts ...grpc.Call
 
 type Submission_SubmitSnapshotClient interface {
 	Send(*SnapshotSubmission) error
-	CloseAndRecv() (*SubmissionResponse, error)
+	Recv() (*SubmissionResponse, error)
 	grpc.ClientStream
 }
 
@@ -60,10 +60,7 @@ func (x *submissionSubmitSnapshotClient) Send(m *SnapshotSubmission) error {
 	return x.ClientStream.SendMsg(m)
 }
 
-func (x *submissionSubmitSnapshotClient) CloseAndRecv() (*SubmissionResponse, error) {
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
+func (x *submissionSubmitSnapshotClient) Recv() (*SubmissionResponse, error) {
 	m := new(SubmissionResponse)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
@@ -104,7 +101,7 @@ func _Submission_SubmitSnapshot_Handler(srv interface{}, stream grpc.ServerStrea
 }
 
 type Submission_SubmitSnapshotServer interface {
-	SendAndClose(*SubmissionResponse) error
+	Send(*SubmissionResponse) error
 	Recv() (*SnapshotSubmission, error)
 	grpc.ServerStream
 }
@@ -113,7 +110,7 @@ type submissionSubmitSnapshotServer struct {
 	grpc.ServerStream
 }
 
-func (x *submissionSubmitSnapshotServer) SendAndClose(m *SubmissionResponse) error {
+func (x *submissionSubmitSnapshotServer) Send(m *SubmissionResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
@@ -136,6 +133,7 @@ var Submission_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "SubmitSnapshot",
 			Handler:       _Submission_SubmitSnapshot_Handler,
+			ServerStreams: true,
 			ClientStreams: true,
 		},
 	},

@@ -105,7 +105,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 				return err
 			}
 
-			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
+			return stream.Send(&pkgs.SubmissionResponse{Message: "Success"})
 		}
 
 		log.Debugln("Received submission with request: ", submission.Request)
@@ -140,6 +140,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 				return err
 			}, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 2))
 		}
+		stream.Send(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()})
 	}
 }
 
