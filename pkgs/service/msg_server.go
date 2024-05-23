@@ -58,7 +58,7 @@ func setNewStream(s *server) error {
 }
 
 // TODO: Maintain a global list of visited peers and continue connection establishment from the last accepted peer; refresh the list only when all the peers have been visited
-func mustSetStream(s *server) {
+func mustSetStream(s *server) error {
 	var peers []peer.ID
 	var connectedPeer peer.ID
 	var err error
@@ -76,19 +76,22 @@ func mustSetStream(s *server) {
 		}
 		return err
 	}
-	backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 7))
+	return backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 3))
 }
 
-func TryConnection(s *server) {
+func TryConnection(s *server) error {
 	ConnectToSequencer(rpctorelay.ID())
-	mustSetStream(s)
+	return mustSetStream(s)
 }
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
 	defer stream.Context().Done()
 	mu.Lock()
 	if s.stream == nil || s.stream.Conn().IsClosed() {
-		TryConnection(s)
+		if err := TryConnection(s); err != nil {
+			log.Errorln("Unexpected connection error: ", err.Error())
+			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
+		}
 	}
 	mu.Unlock()
 	var submissionId uuid.UUID
@@ -104,6 +107,79 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			default:
 				log.Errorln("Unexpected stream error: ", err.Error())
 				return err
+			}
+
+			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
+		}
+
+		log.Debugln("Received submission with request: ", submission.Request)
+
+		submissionId = uuid.New() // Generates a new UUID
+		submissionIdBytes, err := submissionId.MarshalText()
+
+		subBytes, err := json.Marshal(submission)
+		if err != nil {
+			log.Debugln("Error marshalling submissionId: ", err.Error())
+		}
+		log.Debugln("Sending submission with ID: ", submissionId.String())
+
+		submissionBytes := append(submissionIdBytes, subBytes...)
+		if err != nil {
+			log.Debugln("Could not marshal submission")
+			return err
+		}
+		if _, err = s.stream.Write(submissionBytes); err != nil {
+			log.Debugln("Stream write error: ", err.Error())
+			s.stream.Close()
+
+			mu.Lock()
+			if err := TryConnection(s); err != nil {
+				log.Errorln("Unexpected connection error: ", err.Error())
+				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
+			}
+			mu.Unlock()
+
+			err = backoff.Retry(func() error {
+				_, err = s.stream.Write(subBytes)
+				if err != nil {
+					log.Errorln("Sequencer stream error, retrying: ", err.Error())
+				}
+				return err
+			}, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 2))
+			if err != nil {
+				stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
+				log.Errorln("Failed to write to stream: ", err.Error())
+				return err
+			} else {
+				log.Debugln("Stream write successful")
+			}
+		}
+	}
+}
+
+func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotSimulationServer) error {
+	defer stream.Context().Done()
+	mu.Lock()
+	if s.stream == nil || s.stream.Conn().IsClosed() {
+		if err := TryConnection(s); err != nil {
+			log.Errorln("Unexpected connection error: ", err.Error())
+			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
+		}
+	}
+	mu.Unlock()
+	var submissionId uuid.UUID
+	for {
+		submission, err := stream.Recv()
+
+		if err != nil {
+			switch {
+			case err == io.EOF:
+				log.Debugln("EOF reached")
+			case strings.Contains(err.Error(), "context canceled"):
+				log.Errorln("Stream ended by client: ")
+			default:
+				log.Errorln("Unexpected stream error: ", err.Error())
+				return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
 			}
 
 			return stream.Send(&pkgs.SubmissionResponse{Message: "Success"})
@@ -130,7 +206,10 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			s.stream.Close()
 
 			mu.Lock()
-			TryConnection(s)
+			if err := TryConnection(s); err != nil {
+				log.Errorln("Unexpected connection error: ", err.Error())
+				return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
+			}
 			mu.Unlock()
 
 			err = backoff.Retry(func() error {
