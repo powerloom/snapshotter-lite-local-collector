@@ -89,15 +89,6 @@ func TryConnection(s *server) error {
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
 	defer stream.Context().Done()
-	mu.Lock()
-	if s.stream == nil || s.stream.Conn().IsClosed() {
-		if err := TryConnection(s); err != nil {
-			log.Errorln("Unexpected connection error: ", err.Error())
-			s.reportingService.SendFailureNotification(fmt.Sprintf("Unexpected connection error: ", err.Error()))
-			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
-		}
-	}
-	mu.Unlock()
 	var submissionId uuid.UUID
 	for {
 		submission, err := stream.Recv()
@@ -117,6 +108,16 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 		}
 
 		log.Debugln("Received submission with request: ", submission.Request)
+
+		mu.Lock()
+		if s.stream == nil || s.stream.Conn().IsClosed() {
+			if err := TryConnection(s); err != nil {
+				log.Errorln("Unexpected connection error: ", err.Error())
+				s.reportingService.SendFailureNotification(submission.Request, fmt.Sprintf("Unexpected connection error: %s", err.Error()))
+				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
+			}
+		}
+		mu.Unlock()
 
 		submissionId = uuid.New() // Generates a new UUID
 		submissionIdBytes, err := submissionId.MarshalText()
