@@ -48,5 +48,5 @@ func (s *ReportingService) SendFailureNotification(stringData string) {
 	defer resp.Body.Close()
 
 	// Here you can handle response or further actions
-	log.Debugln("Response status: ", resp.Status)
+	log.Debugln("Reporting service response status: ", resp.Status)
 }
