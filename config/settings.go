@@ -14,6 +14,7 @@ type Settings struct {
 	RelayerRendezvousPoint string `json:"RelayerRendezvousPoint"`
 	ClientRendezvousPoint  string `json:"ClientRendezvousPoint"`
 	RelayerPrivateKey      string `json:"RelayerPrivateKey"`
+	PowerloomReportingUrl  string `json:"PowerloomReportingUrl"`
 }
 
 func LoadConfig() {
