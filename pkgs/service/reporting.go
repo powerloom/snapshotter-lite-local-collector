@@ -1,4 +1,4 @@
-package helpers
+package service
 
 import (
 	"bytes"
@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"time"
 )
+
+var ReportingInstance *ReportingService
 
 type ReportingService struct {
 	url    string
@@ -25,22 +27,35 @@ type SnapshotterIssue struct {
 	Extra           string `json:"extra"`
 }
 
-func InitializeReportingService(url string, timeout time.Duration) *ReportingService {
-	return &ReportingService{
+func InitializeReportingService(url string, timeout time.Duration) {
+	ReportingInstance = &ReportingService{
 		url: url + "/reportIssue", client: &http.Client{Timeout: timeout},
 	}
 }
 
 // sendPostRequest sends a POST request to the specified URL
 func (s *ReportingService) SendFailureNotification(request *pkgs.Request, extraData string) {
-	issue := SnapshotterIssue{
-		InstanceID:      config.SettingsObj.SignerAccountAddress,
-		IssueType:       "RELAYER_CONNECTION_FAILURE", // Assume you have a constant or enum equivalent
-		ProjectID:       request.ProjectId,
-		EpochID:         strconv.FormatUint(request.EpochId, 10), // Convert uint64 or similar to string
-		TimeOfReporting: strconv.FormatInt(time.Now().Unix(), 10),
-		Extra:           fmt.Sprintf(`{"issueDetails":"Error : %s"}`, extraData),
+	var issue SnapshotterIssue
+	if request == nil {
+		issue = SnapshotterIssue{
+			InstanceID:      config.SettingsObj.SignerAccountAddress,
+			IssueType:       "RELAYER_CONNECTION_FAILURE", // Assume you have a constant or enum equivalent
+			ProjectID:       "",
+			EpochID:         "0", // Convert uint64 or similar to string
+			TimeOfReporting: strconv.FormatInt(time.Now().Unix(), 10),
+			Extra:           fmt.Sprintf(`{"issueDetails":"Error : %s"}`, extraData),
+		}
+	} else {
+		issue = SnapshotterIssue{
+			InstanceID:      config.SettingsObj.SignerAccountAddress,
+			IssueType:       "RELAYER_CONNECTION_FAILURE", // Assume you have a constant or enum equivalent
+			ProjectID:       request.ProjectId,
+			EpochID:         strconv.FormatUint(request.EpochId, 10), // Convert uint64 or similar to string
+			TimeOfReporting: strconv.FormatInt(time.Now().Unix(), 10),
+			Extra:           fmt.Sprintf(`{"issueDetails":"Error : %s"}`, extraData),
+		}
 	}
+
 	jsonData, err := json.Marshal(issue)
 	if err != nil {
 		log.Errorln("Unable to marshal notification for request: ", request.String())

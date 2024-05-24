@@ -128,13 +128,17 @@ func ConfigureRelayer() {
 	util.Advertise(context.Background(), routingDiscovery, config.SettingsObj.ClientRendezvousPoint)
 
 	peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, nil)
-
+	if peerId == "" {
+		ReportingInstance.SendFailureNotification(nil, "Unable to connect to relayer peers")
+		return
+	}
 	ConnectToSequencer(peerId)
 }
 
 func ConnectToSequencer(peerId peer.ID) {
 	if peerId == "" {
-		log.Debugln("Not connected to a relayer, establishing connection")
+		log.Debugln("Not connected to a relayer")
+		return
 	}
 	sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.SequencerId))
 	if err != nil {

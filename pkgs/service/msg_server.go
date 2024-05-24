@@ -16,7 +16,6 @@ import (
 	"net"
 	"proto-snapshot-server/config"
 	"proto-snapshot-server/pkgs"
-	"proto-snapshot-server/pkgs/helpers"
 	"strings"
 	"sync"
 	"time"
@@ -25,8 +24,7 @@ import (
 // server is used to implement submission.SubmissionService.
 type server struct {
 	pkgs.UnimplementedSubmissionServer
-	stream           network.Stream
-	reportingService *helpers.ReportingService
+	stream network.Stream
 }
 
 var _ pkgs.SubmissionServer = &server{}
@@ -35,7 +33,7 @@ var mu sync.Mutex
 // NewMsgServerImpl returns an implementation of the SubmissionService interface
 // for the provided Keeper.
 func NewMsgServerImpl() pkgs.SubmissionServer {
-	return &server{reportingService: helpers.InitializeReportingService(config.SettingsObj.PowerloomReportingUrl, 5*time.Second)}
+	return &server{}
 }
 
 func setNewStream(s *server) error {
@@ -113,7 +111,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 		if s.stream == nil || s.stream.Conn().IsClosed() {
 			if err := TryConnection(s); err != nil {
 				log.Errorln("Unexpected connection error: ", err.Error())
-				s.reportingService.SendFailureNotification(submission.Request, fmt.Sprintf("Unexpected connection error: %s", err.Error()))
+				ReportingInstance.SendFailureNotification(submission.Request, fmt.Sprintf("Unexpected connection error: %s", err.Error()))
 				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
 			}
 		}
