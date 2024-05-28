@@ -99,7 +99,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 				log.Errorln("Stream ended by client: ")
 			default:
 				log.Errorln("Unexpected stream error: ", err.Error())
-				return err
+				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
 			}
 
 			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
