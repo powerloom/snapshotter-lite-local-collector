@@ -1,1 +1,1 @@
-docker build -t proto-snapshot-server .
+docker build -t snapshotter-lite-local-collector .

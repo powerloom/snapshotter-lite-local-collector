@@ -19,13 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	Submission_SubmitSnapshot_FullMethodName = "/submission.Submission/SubmitSnapshot"
+	Submission_SubmitSnapshotSimulation_FullMethodName = "/submission.Submission/SubmitSnapshotSimulation"
+	Submission_SubmitSnapshot_FullMethodName           = "/submission.Submission/SubmitSnapshot"
 )
 
 // SubmissionClient is the client API for Submission service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type SubmissionClient interface {
+	SubmitSnapshotSimulation(ctx context.Context, opts ...grpc.CallOption) (Submission_SubmitSnapshotSimulationClient, error)
 	SubmitSnapshot(ctx context.Context, opts ...grpc.CallOption) (Submission_SubmitSnapshotClient, error)
 }
 
@@ -37,8 +39,39 @@ func NewSubmissionClient(cc grpc.ClientConnInterface) SubmissionClient {
 	return &submissionClient{cc}
 }
 
+func (c *submissionClient) SubmitSnapshotSimulation(ctx context.Context, opts ...grpc.CallOption) (Submission_SubmitSnapshotSimulationClient, error) {
+	stream, err := c.cc.NewStream(ctx, &Submission_ServiceDesc.Streams[0], Submission_SubmitSnapshotSimulation_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &submissionSubmitSnapshotSimulationClient{stream}
+	return x, nil
+}
+
+type Submission_SubmitSnapshotSimulationClient interface {
+	Send(*SnapshotSubmission) error
+	Recv() (*SubmissionResponse, error)
+	grpc.ClientStream
+}
+
+type submissionSubmitSnapshotSimulationClient struct {
+	grpc.ClientStream
+}
+
+func (x *submissionSubmitSnapshotSimulationClient) Send(m *SnapshotSubmission) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *submissionSubmitSnapshotSimulationClient) Recv() (*SubmissionResponse, error) {
+	m := new(SubmissionResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (c *submissionClient) SubmitSnapshot(ctx context.Context, opts ...grpc.CallOption) (Submission_SubmitSnapshotClient, error) {
-	stream, err := c.cc.NewStream(ctx, &Submission_ServiceDesc.Streams[0], Submission_SubmitSnapshot_FullMethodName, opts...)
+	stream, err := c.cc.NewStream(ctx, &Submission_ServiceDesc.Streams[1], Submission_SubmitSnapshot_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -75,6 +108,7 @@ func (x *submissionSubmitSnapshotClient) CloseAndRecv() (*SubmissionResponse, er
 // All implementations must embed UnimplementedSubmissionServer
 // for forward compatibility
 type SubmissionServer interface {
+	SubmitSnapshotSimulation(Submission_SubmitSnapshotSimulationServer) error
 	SubmitSnapshot(Submission_SubmitSnapshotServer) error
 	mustEmbedUnimplementedSubmissionServer()
 }
@@ -83,6 +117,9 @@ type SubmissionServer interface {
 type UnimplementedSubmissionServer struct {
 }
 
+func (UnimplementedSubmissionServer) SubmitSnapshotSimulation(Submission_SubmitSnapshotSimulationServer) error {
+	return status.Errorf(codes.Unimplemented, "method SubmitSnapshotSimulation not implemented")
+}
 func (UnimplementedSubmissionServer) SubmitSnapshot(Submission_SubmitSnapshotServer) error {
 	return status.Errorf(codes.Unimplemented, "method SubmitSnapshot not implemented")
 }
@@ -97,6 +134,32 @@ type UnsafeSubmissionServer interface {
 
 func RegisterSubmissionServer(s grpc.ServiceRegistrar, srv SubmissionServer) {
 	s.RegisterService(&Submission_ServiceDesc, srv)
+}
+
+func _Submission_SubmitSnapshotSimulation_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(SubmissionServer).SubmitSnapshotSimulation(&submissionSubmitSnapshotSimulationServer{stream})
+}
+
+type Submission_SubmitSnapshotSimulationServer interface {
+	Send(*SubmissionResponse) error
+	Recv() (*SnapshotSubmission, error)
+	grpc.ServerStream
+}
+
+type submissionSubmitSnapshotSimulationServer struct {
+	grpc.ServerStream
+}
+
+func (x *submissionSubmitSnapshotSimulationServer) Send(m *SubmissionResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *submissionSubmitSnapshotSimulationServer) Recv() (*SnapshotSubmission, error) {
+	m := new(SnapshotSubmission)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func _Submission_SubmitSnapshot_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -133,6 +196,12 @@ var Submission_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*SubmissionServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "SubmitSnapshotSimulation",
+			Handler:       _Submission_SubmitSnapshotSimulation_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
 		{
 			StreamName:    "SubmitSnapshot",
 			Handler:       _Submission_SubmitSnapshot_Handler,
