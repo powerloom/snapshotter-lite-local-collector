@@ -99,7 +99,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 				log.Errorln("Stream ended by client: ")
 			default:
 				log.Errorln("Unexpected stream error: ", err.Error())
-				return err
+				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
 			}
 
 			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
@@ -112,6 +112,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			if err := TryConnection(s); err != nil {
 				log.Errorln("Unexpected connection error: ", err.Error())
 				ReportingInstance.SendFailureNotification(submission.Request, fmt.Sprintf("Unexpected connection error: %s", err.Error()))
+				mu.Unlock()
 				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
 			}
 		}
@@ -138,6 +139,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			mu.Lock()
 			if err := TryConnection(s); err != nil {
 				log.Errorln("Unexpected connection error: ", err.Error())
+				mu.Unlock()
 				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
 			}
 			mu.Unlock()
@@ -166,6 +168,7 @@ func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotS
 	if s.stream == nil || s.stream.Conn().IsClosed() {
 		if err := TryConnection(s); err != nil {
 			log.Errorln("Unexpected connection error: ", err.Error())
+			mu.Unlock()
 			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
 		}
 	}
@@ -211,6 +214,7 @@ func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotS
 			mu.Lock()
 			if err := TryConnection(s); err != nil {
 				log.Errorln("Unexpected connection error: ", err.Error())
+				mu.Unlock()
 				return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
 			}
 			mu.Unlock()
