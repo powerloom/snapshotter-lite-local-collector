@@ -3,6 +3,7 @@
 set -e
 
 echo 'populating server settings from environment values...';
+export LOCAL_COLLECTOR_PORT="${LOCAL_COLLECTOR_PORT:-50051}"
 
 if [ -z "$CLIENT_RENDEZVOUS_POINT" ]; then
     echo "CLIENT_RENDEZVOUS_POINT not found, please set this in your .env!";
@@ -34,8 +35,6 @@ else
 fi
 
 export RELAYER_PRIVATE_KEY
-export LOCAL_COLLECTOR_PORT="${LOCAL_COLLECTOR_PORT:-50051}"
-
 
 # Replace placeholders in settings.json with actual values from environment variables
 sed -i'.backup' -e "s#SEQUENCER_ID#$SEQUENCER_ID#" \
