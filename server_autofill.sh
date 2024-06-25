@@ -3,6 +3,7 @@
 set -e
 
 echo 'populating server settings from environment values...';
+export LOCAL_COLLECTOR_PORT="${LOCAL_COLLECTOR_PORT:-50051}"
 
 if [ -z "$CLIENT_RENDEZVOUS_POINT" ]; then
     echo "CLIENT_RENDEZVOUS_POINT not found, please set this in your .env!";
@@ -16,7 +17,10 @@ if [ -z "$SEQUENCER_ID" ]; then
     echo "SEQUENCER_ID not found, please set this in your .env!";
     exit 1;
 fi
-
+if [ -z "$LOCAL_COLLECTOR_PORT" ]; then
+    echo "LOCAL_COLLECTOR_PORT not found, please set this in your .env!";
+    exit 1;
+fi
 cd config
 
 # Template to actual settings.json manipulation
@@ -38,6 +42,7 @@ sed -i'.backup' -e "s#SEQUENCER_ID#$SEQUENCER_ID#" \
                 -e "s#CLIENT_RENDEZVOUS_POINT#$CLIENT_RENDEZVOUS_POINT#" \
                 -e "s#POWERLOOM_REPORTING_URL#$POWERLOOM_REPORTING_URL#" \
                 -e "s#SIGNER_ACCOUNT_ADDRESS#$SIGNER_ACCOUNT_ADDRESS#" \
+                -e "s#LOCAL_COLLECTOR_PORT#$LOCAL_COLLECTOR_PORT#" \
                 -e "s#RELAYER_PRIVATE_KEY#$RELAYER_PRIVATE_KEY#" settings.json
 
 # Cleanup backup file

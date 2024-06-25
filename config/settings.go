@@ -16,6 +16,7 @@ type Settings struct {
 	RelayerPrivateKey      string `json:"RelayerPrivateKey"`
 	PowerloomReportingUrl  string `json:"PowerloomReportingUrl"`
 	SignerAccountAddress   string `json:"SignerAccountAddress"`
+	PortNumber             string `json:"LocalCollectorPort"`
 }
 
 func LoadConfig() {

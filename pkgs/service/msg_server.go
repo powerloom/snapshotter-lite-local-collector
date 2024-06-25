@@ -243,7 +243,7 @@ func (s *server) mustEmbedUnimplementedSubmissionServer() {
 }
 
 func StartSubmissionServer(server pkgs.SubmissionServer) {
-	lis, err := net.Listen("tcp", ":50051")
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", config.SettingsObj.PortNumber))
 
 	if err != nil {
 		log.Debugf("failed to listen: %v", err)
