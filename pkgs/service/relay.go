@@ -2,10 +2,8 @@ package service
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"github.com/libp2p/go-libp2p"
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -18,7 +16,6 @@ import (
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
-	"os"
 	"proto-snapshot-server/config"
 	"time"
 )
@@ -71,31 +68,8 @@ func ConfigureRelayer() {
 
 	rm, err := rcmgr.NewResourceManager(limiter, rcmgr.WithMetricsDisabled())
 
-	var pk crypto.PrivKey
-	if config.SettingsObj.RelayerPrivateKey == "" {
-		pk, err = generateAndSaveKey()
-		if err != nil {
-			log.Errorln("Unable to generate private key:  ", err)
-		} else {
-			log.Debugln("Private key not found, new private key generated")
-		}
-	} else {
-		pkBytes, err := base64.StdEncoding.DecodeString(config.SettingsObj.RelayerPrivateKey)
-		if err != nil {
-			log.Errorln("Unable to decode private key: ", err)
-		} else {
-			pk, err = crypto.UnmarshalPrivateKey(pkBytes)
-			if err != nil {
-				log.Errorln("Unable to unmarshal private key: ", err)
-			} else {
-				log.Debugln("Private key unmarshalled")
-			}
-		}
-	}
-
 	rpctorelay, err = libp2p.New(
 		libp2p.EnableRelay(),
-		libp2p.Identity(pk),
 		libp2p.ConnectionManager(connManager),
 		libp2p.ListenAddrs(tcpAddr),
 		libp2p.ResourceManager(rm),
@@ -159,27 +133,4 @@ func ConnectToSequencer(peerId peer.ID) {
 	} else {
 		log.Debugln("Successfully connected to the Sequencer: ", sequencerAddr.String())
 	}
-}
-
-func generateAndSaveKey() (crypto.PrivKey, error) {
-	priv, _, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
-	if err != nil {
-		return nil, err
-	}
-	encodedKey := PrivateKeyToString(priv)
-	err = os.WriteFile("/keys/key.txt", []byte(encodedKey), 0644)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return priv, nil
-}
-
-func PrivateKeyToString(privKey crypto.PrivKey) string {
-	privBytes, err := crypto.MarshalPrivateKey(privKey)
-	if err != nil {
-		log.Errorln("Unable to convert private key to string")
-	}
-
-	encodedKey := base64.StdEncoding.EncodeToString(privBytes)
-	return encodedKey
 }
