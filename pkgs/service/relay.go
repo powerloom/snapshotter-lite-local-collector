@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
-	"fmt"
+	"proto-snapshot-server/config"
+	"time"
+
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -16,8 +18,6 @@ import (
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
-	"proto-snapshot-server/config"
-	"time"
 )
 
 var rpctorelay host.Host
@@ -101,20 +101,22 @@ func ConfigureRelayer() {
 
 	util.Advertise(context.Background(), routingDiscovery, config.SettingsObj.ClientRendezvousPoint)
 
-	peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, nil)
-	if peerId == "" {
-		ReportingInstance.SendFailureNotification(nil, "Unable to connect to relayer peers")
-		return
-	}
-	ConnectToSequencer(peerId)
+	// peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, nil)
+	// if peerId == "" {
+	// 	ReportingInstance.SendFailureNotification(nil, "Unable to connect to relayer peers")
+	// 	return
+	// }
+	// ConnectToSequencer(peerId)
+	ConnectToSequencer()
 }
 
-func ConnectToSequencer(peerId peer.ID) {
-	if peerId == "" {
-		log.Debugln("Not connected to a relayer")
-		return
-	}
-	sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.SequencerId))
+func ConnectToSequencer() {
+	// if peerId == "" {
+	// 	log.Debugln("Not connected to a relayer")
+	// 	return
+	// }
+	// sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.SequencerId))
+	sequencerAddr, err := ma.NewMultiaddr("/ip4/159.223.164.169/tcp/9100/p2p/QmdJbNsbHpFseUPKC9vLt4vMsfdxA4dyHPzsAWuzYz3Yxx")
 	if err != nil {
 		log.Debugln(err.Error())
 		return

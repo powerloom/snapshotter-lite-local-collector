@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/cenkalti/backoff/v4"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -12,7 +14,6 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
-	"sync"
 )
 
 func isVisited(id peer.ID, visited []peer.ID) bool {
@@ -71,7 +72,7 @@ func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscove
 	log.Debugln("Skipping visited peers: ", visited)
 
 	for relayer := range peerChan {
-		if relayer.ID == host.ID() || isVisited(relayer.ID, visited) {
+		if relayer.ID == host.ID() {
 			continue // Skip self or peers with no addresses
 		}
 
@@ -85,7 +86,7 @@ func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscove
 			}
 		} else {
 			log.Debugln("Already connected to: ", relayer.ID)
-			return relayer.ID
+			// return relayer.ID
 		}
 	}
 	log.Debugln("Active connections: ", activeConnections)

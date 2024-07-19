@@ -5,13 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/cenkalti/backoff/v4"
-	"github.com/google/uuid"
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/sethvargo/go-retry"
-	log "github.com/sirupsen/logrus"
-	"google.golang.org/grpc"
 	"io"
 	"net"
 	"proto-snapshot-server/config"
@@ -19,6 +12,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cenkalti/backoff/v4"
+	"github.com/google/uuid"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/sethvargo/go-retry"
+	log "github.com/sirupsen/logrus"
+	"google.golang.org/grpc"
 )
 
 // server is used to implement submission.SubmissionService.
@@ -41,7 +41,7 @@ func setNewStream(s *server) error {
 		st, err := rpctorelay.NewStream(network.WithUseTransient(context.Background(), "collect"), SequencerId, "/collect")
 		if err != nil {
 			log.Debugln("unable to establish stream: ", err.Error())
-			ConnectToSequencer(rpctorelay.ID())
+			ConnectToSequencer()
 			return retry.RetryableError(err) // Mark the error as retryable
 		}
 		s.stream = st
@@ -60,29 +60,29 @@ func setNewStream(s *server) error {
 
 // TODO: Maintain a global list of visited peers and continue connection establishment from the last accepted peer; refresh the list only when all the peers have been visited
 func mustSetStream(s *server) error {
-	var peers []peer.ID
-	var connectedPeer peer.ID
-	var err error
+	// var peers []peer.ID
+	// var connectedPeer peer.ID
+	// var err error
 	operation := func() error {
-		err = setNewStream(s)
+		ConnectToSequencer()
+		// return nil
+		var err = setNewStream(s)
 		if err != nil {
 			log.Errorln(err.Error())
-			connectedPeer = ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, peers)
-			if len(connectedPeer.String()) > 0 {
-				peers = append(peers, connectedPeer)
-				ConnectToSequencer(connectedPeer)
-			} else {
-				peers = []peer.ID{}
-				return errors.New("No peer connections formed")
-			}
+			// 	connectedPeer = ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, peers)
+			// 	if len(connectedPeer.String()) > 0 {
+			// 		peers = append(peers, connectedPeer)
+			ConnectToSequencer()
+		} else {
+			return err
 		}
-		return err
+		return nil
 	}
-	return backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 1))
+	return backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 3))
 }
 
 func TryConnection(s *server) error {
-	ConnectToSequencer(rpctorelay.ID())
+	ConnectToSequencer()
 	return mustSetStream(s)
 }
 
