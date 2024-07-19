@@ -60,16 +60,18 @@ func setNewStream(s *server) error {
 
 // TODO: Maintain a global list of visited peers and continue connection establishment from the last accepted peer; refresh the list only when all the peers have been visited
 func mustSetStream(s *server) error {
-	var peers []peer.ID
+	var visitedPeers []peer.ID
 	var connectedPeer peer.ID
 	var err error
 	operation := func() error {
 		err = setNewStream(s)
 		if err != nil {
+			if len(visitedPeers) >= len(trustedPeers) {
+				visitedPeers = []peer.ID{}
+			}
 			log.Errorln(err.Error())
-			connectedPeer = ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, peers)
-			if len(connectedPeer.String()) > 0 {
-				peers = append(peers)
+			if connectedPeer = ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, visitedPeers); len(connectedPeer.String()) > 0 {
+				visitedPeers = append(visitedPeers, connectedPeer)
 				ConnectToSequencer(connectedPeer)
 			} else {
 				return errors.New("No peer connections formed")

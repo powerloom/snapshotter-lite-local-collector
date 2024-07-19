@@ -12,9 +12,20 @@ import (
 	"sync"
 )
 
+var trustedPeers = []string{"QmWG6hesiCV5uFJwPaThtSrfnwEnwQovuXHJB6j6j7p4TL", "QmaNQc1MbGzrwbmUytPfikkrJeJ5sZF24ZZa47RGRnYoo8", "QmcAu8nGPkC9wcvT8kzigWGRgbAXRxVakpxfkSTT7h9Qqo", "QmYsHDQTqMctz59UCmvyDMnShHSm7T1iYJAL3FwBL3qFVL", "QmVQqgyHDVxY5X4wLHCC4HrgPnFXNWxXzeAEcBgUeDmPxT"}
+
 func isVisited(id peer.ID, visited []peer.ID) bool {
 	for _, v := range visited {
 		if v == id {
+			return true
+		}
+	}
+	return false
+}
+
+func isTrusted(id string) bool {
+	for _, peer := range trustedPeers {
+		if peer == id {
 			return true
 		}
 	}
@@ -31,7 +42,7 @@ func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscove
 	log.Debugln("Skipping visited peers: ", visited)
 
 	for relayer := range peerChan {
-		if relayer.ID == host.ID() || isVisited(relayer.ID, visited) {
+		if relayer.ID == host.ID() || isVisited(relayer.ID, visited) || !isTrusted(relayer.String()) {
 			continue // Skip self or peers with no addresses
 		}
 
