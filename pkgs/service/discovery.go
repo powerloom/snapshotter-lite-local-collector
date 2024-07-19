@@ -39,10 +39,11 @@ func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscove
 	}
 	log.Debugln("Triggering peer discovery")
 
-	log.Debugln("Skipping visited peers: ", visited)
-
 	for relayer := range peerChan {
-		if relayer.ID == host.ID() || isVisited(relayer.ID, visited) || !isTrusted(relayer.String()) {
+		if relayer.ID == host.ID() || isVisited(relayer.ID, visited) || !isTrusted(relayer.ID.String()) {
+			if isVisited(relayer.ID, visited) {
+				log.Debugln("Skipping visited peer: ", relayer.ID.String())
+			}
 			continue // Skip self or peers with no addresses
 		}
 

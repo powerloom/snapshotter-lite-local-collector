@@ -136,7 +136,7 @@ func ConfigureRelayer() {
 }
 
 func ConnectToSequencer(peerId peer.ID) {
-	if peerId == "" {
+	if peerId == "" || peerId == rpctorelay.ID() {
 		log.Debugln("Not connected to a relayer")
 		return
 	}

@@ -67,11 +67,14 @@ func mustSetStream(s *server) error {
 		err = setNewStream(s)
 		if err != nil {
 			if len(visitedPeers) >= len(trustedPeers) {
+				log.Debugln("Resetting visitedPeers: ", len(visitedPeers))
 				visitedPeers = []peer.ID{}
 			}
 			log.Errorln(err.Error())
 			if connectedPeer = ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, visitedPeers); len(connectedPeer.String()) > 0 {
+				log.Debugln("Noting visited peer: ", connectedPeer.String())
 				visitedPeers = append(visitedPeers, connectedPeer)
+				log.Debugln("Total visited peers: ", len(visitedPeers))
 				ConnectToSequencer(connectedPeer)
 			} else {
 				return errors.New("No peer connections formed")
@@ -79,7 +82,7 @@ func mustSetStream(s *server) error {
 		}
 		return err
 	}
-	return backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 3))
+	return backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 1))
 }
 
 func TryConnection(s *server) error {
