@@ -2,10 +2,10 @@ package service
 
 import (
 	"context"
-	"encoding/base64"
-	"fmt"
+	"proto-snapshot-server/config"
+	"time"
+
 	"github.com/libp2p/go-libp2p"
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -18,9 +18,6 @@ import (
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
-	"os"
-	"proto-snapshot-server/config"
-	"time"
 )
 
 var rpctorelay host.Host
@@ -71,31 +68,8 @@ func ConfigureRelayer() {
 
 	rm, err := rcmgr.NewResourceManager(limiter, rcmgr.WithMetricsDisabled())
 
-	var pk crypto.PrivKey
-	if config.SettingsObj.RelayerPrivateKey == "" {
-		pk, err = generateAndSaveKey()
-		if err != nil {
-			log.Errorln("Unable to generate private key:  ", err)
-		} else {
-			log.Debugln("Private key not found, new private key generated")
-		}
-	} else {
-		pkBytes, err := base64.StdEncoding.DecodeString(config.SettingsObj.RelayerPrivateKey)
-		if err != nil {
-			log.Errorln("Unable to decode private key: ", err)
-		} else {
-			pk, err = crypto.UnmarshalPrivateKey(pkBytes)
-			if err != nil {
-				log.Errorln("Unable to unmarshal private key: ", err)
-			} else {
-				log.Debugln("Private key unmarshalled")
-			}
-		}
-	}
-
 	rpctorelay, err = libp2p.New(
 		libp2p.EnableRelay(),
-		libp2p.Identity(pk),
 		libp2p.ConnectionManager(connManager),
 		libp2p.ListenAddrs(tcpAddr),
 		libp2p.ResourceManager(rm),
@@ -127,20 +101,22 @@ func ConfigureRelayer() {
 
 	util.Advertise(context.Background(), routingDiscovery, config.SettingsObj.ClientRendezvousPoint)
 
-	peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, nil)
-	if peerId == "" {
-		ReportingInstance.SendFailureNotification(nil, "Unable to connect to relayer peers")
-		return
-	}
-	ConnectToSequencer(peerId)
+	// peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, nil)
+	// if peerId == "" {
+	// 	ReportingInstance.SendFailureNotification(nil, "Unable to connect to relayer peers")
+	// 	return
+	// }
+	// ConnectToSequencer(peerId)
+	ConnectToSequencer()
 }
 
-func ConnectToSequencer(peerId peer.ID) {
-	if peerId == "" {
-		log.Debugln("Not connected to a relayer")
-		return
-	}
-	sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.SequencerId))
+func ConnectToSequencer() {
+	// if peerId == "" {
+	// 	log.Debugln("Not connected to a relayer")
+	// 	return
+	// }
+	// sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.SequencerId))
+	sequencerAddr, err := ma.NewMultiaddr("/ip4/159.223.164.169/tcp/9100/p2p/QmdJbNsbHpFseUPKC9vLt4vMsfdxA4dyHPzsAWuzYz3Yxx")
 	if err != nil {
 		log.Debugln(err.Error())
 		return
@@ -159,27 +135,4 @@ func ConnectToSequencer(peerId peer.ID) {
 	} else {
 		log.Debugln("Successfully connected to the Sequencer: ", sequencerAddr.String())
 	}
-}
-
-func generateAndSaveKey() (crypto.PrivKey, error) {
-	priv, _, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
-	if err != nil {
-		return nil, err
-	}
-	encodedKey := PrivateKeyToString(priv)
-	err = os.WriteFile("/keys/key.txt", []byte(encodedKey), 0644)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return priv, nil
-}
-
-func PrivateKeyToString(privKey crypto.PrivKey) string {
-	privBytes, err := crypto.MarshalPrivateKey(privKey)
-	if err != nil {
-		log.Errorln("Unable to convert private key to string")
-	}
-
-	encodedKey := base64.StdEncoding.EncodeToString(privBytes)
-	return encodedKey
 }
