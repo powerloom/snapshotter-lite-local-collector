@@ -32,14 +32,14 @@ func connectToStableRelayer(ctx context.Context, host host.Host, relayerAddr str
 
 	peerInfo, err := peer.AddrInfoFromP2pAddr(stableRelayerMA)
 	if err != nil {
-		log.Fatalf("Failed to extract peer info from multiaddress: %v", err)
+		log.Debugln("Failed to extract peer info from multiaddress: %v", err)
 	}
 
 	// Add the peer to the peerstore
 	host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, peerstore.PermanentAddrTTL)
 
 	if err := host.Connect(ctx, *peerInfo); err != nil {
-		log.Fatalf("Failed to connect to stable relayer: %v", err)
+		log.Debugln("Failed to connect to stable relayer: %v", err)
 	}
 
 	fmt.Println("Connected to stable relayer:", peerInfo.ID)
