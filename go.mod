@@ -6,6 +6,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.2.0
 	github.com/google/uuid v1.6.0
 	github.com/libp2p/go-libp2p v0.32.2
+	github.com/libp2p/go-libp2p-core v0.20.1
 	github.com/libp2p/go-libp2p-kad-dht v0.25.2
 	github.com/multiformats/go-multiaddr v0.12.2
 	github.com/sethvargo/go-retry v0.2.4

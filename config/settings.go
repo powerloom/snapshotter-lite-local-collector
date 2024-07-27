@@ -17,6 +17,8 @@ type Settings struct {
 	PowerloomReportingUrl  string `json:"PowerloomReportingUrl"`
 	SignerAccountAddress   string `json:"SignerAccountAddress"`
 	PortNumber             string `json:"LocalCollectorPort"`
+	TrustedRelayersListUrl string `json:"TrustedRelayersListUrl"`
+	SequencerNetworkPath   string `json:"SequencerNetworkPath"`
 }
 
 func LoadConfig() {

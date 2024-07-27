@@ -5,5 +5,6 @@
   "RelayerPrivateKey": "RELAYER_PRIVATE_KEY",
   "PowerloomReportingUrl": "POWERLOOM_REPORTING_URL",
   "SignerAccountAddress": "SIGNER_ACCOUNT_ADDRESS",
-  "LocalCollectorPort": "LOCAL_COLLECTOR_PORT"
+  "LocalCollectorPort": "LOCAL_COLLECTOR_PORT",
+  "TrustedRelayersListUrl" : "TRUSTED_RELAYERS_LIST_URL",
 }

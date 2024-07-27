@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
+	"io"
+	"net/http"
+	"proto-snapshot-server/config"
 	"sync"
 
 	"github.com/cenkalti/backoff/v4"
@@ -16,6 +19,38 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+type Relayer struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	RendezvousPoint string `json:"rendezvousPoint"`
+	Maddr           string `json:"maddr"`
+}
+
+func fetchTrustedRelayers(url string) []Relayer {
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Fatalf("Failed to fetch JSON: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Debugf("Failed to read response body: %v", err)
+	}
+
+	var relayers []Relayer
+	err = json.Unmarshal(body, &relayers)
+	if err != nil {
+		log.Debugln("Failed to unmarshal JSON:", err)
+	}
+
+	for _, relayer := range relayers {
+		log.Debugf("ID: %s, Name: %s, Rendezvous Point: %s, Maddr: %s\n", relayer.ID, relayer.Name, relayer.RendezvousPoint, relayer.Maddr)
+	}
+
+	return relayers
+}
+
 func isVisited(id peer.ID, visited []peer.ID) bool {
 	for _, v := range visited {
 		if v == id {
@@ -25,42 +60,51 @@ func isVisited(id peer.ID, visited []peer.ID) bool {
 	return false
 }
 
-func connectToStableRelayer(ctx context.Context, host host.Host, relayerAddr string) peer.ID {
-	stableRelayerMA, err := ma.NewMultiaddr("/ip4/104.248.63.86/tcp/5001/p2p/QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm")
+func AddPeerConnection(ctx context.Context, host host.Host, relayerAddr string) bool {
+	stableRelayerMA, err := ma.NewMultiaddr(relayerAddr)
 	if err != nil {
 		log.Debugln("Failed to parse stable peer multiaddress: ", err)
 	}
 
 	peerInfo, err := peer.AddrInfoFromP2pAddr(stableRelayerMA)
 	if err != nil {
-		log.Debugln("Failed to extract peer info from multiaddress: %v", err)
+		log.Debugln("Failed to extract peer info from multiaddress:", err)
+	}
+
+	if host.Network().Connectedness(peerInfo.ID) != network.Connected {
+		log.Debugln("Skipping connected relayer: ", peerInfo.ID)
+		return true
 	}
 
 	// Add the peer to the peerstore
 	host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, peerstore.PermanentAddrTTL)
 
-	if err := host.Connect(ctx, *peerInfo); err != nil {
-		log.Debugln("Failed to connect to stable relayer: %v", err)
+	if err := backoff.Retry(func() error { return host.Connect(ctx, *peerInfo) }, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 1)); err != nil {
+		log.Errorf("Failed to connect to relayer %s: %s", peerInfo.ID, err)
+	} else {
+		log.Infof("Connected to new relayer: %s", peerInfo.ID)
+		return true
 	}
 
-	fmt.Println("Connected to stable relayer:", peerInfo.ID)
-	return peerInfo.ID
+	return false
+}
+
+func ConnectToTrustedRelayers(ctx context.Context, host host.Host) []Relayer {
+	relayers := fetchTrustedRelayers(config.SettingsObj.TrustedRelayersListUrl)
+	var connectedRelayers []Relayer
+
+	for _, relayer := range relayers {
+		if AddPeerConnection(ctx, host, relayer.Maddr) {
+			connectedRelayers = append(connectedRelayers, relayer)
+		}
+	}
+
+	return connectedRelayers
 }
 
 func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscovery, rendezvousString string, host host.Host, visited []peer.ID) peer.ID {
-	stableRelayer1 := "/ip4/104.248.63.86/tcp/5001/p2p/QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm"
-	stableRelayer2 := "/ip4/137.184.132.196/tcp/5001/p2p/QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj"
-
-	// Connect to stable relayers
-	peerID1 := connectToStableRelayer(ctx, host, stableRelayer1)
-	peerID2 := connectToStableRelayer(ctx, host, stableRelayer2)
-
-	if peerID1 != "" {
-		return peerID1
-	}
-	if peerID2 != "" {
-		return peerID2
-	}
+	//stableRelayer1 := "/ip4/104.248.63.86/tcp/5001/p2p/QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm"
+	//stableRelayer2 := "/ip4/137.184.132.196/tcp/5001/p2p/QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj"
 
 	peerChan, err := routingDiscovery.FindPeers(ctx, rendezvousString)
 

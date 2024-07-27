@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"proto-snapshot-server/config"
 	"time"
 
@@ -107,7 +108,25 @@ func ConfigureRelayer() {
 	// 	return
 	// }
 	// ConnectToSequencer(peerId)
+
+	ConnectToTrustedRelayers(context.Background(), rpctorelay)
+
 	ConnectToSequencer()
+}
+
+func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
+	for _, relayer := range relayers {
+		sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", relayer.ID, config.SettingsObj.SequencerId))
+		if err != nil {
+			log.Debugln(err.Error())
+		}
+		log.Debugln("Connecting to Sequencer: ", sequencerAddr.String())
+		isConnected := AddPeerConnection(context.Background(), p2pHost, sequencerAddr.String())
+		if isConnected {
+			return true
+		}
+	}
+	return false
 }
 
 func ConnectToSequencer() {
