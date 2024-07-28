@@ -132,7 +132,7 @@ func ConnectToSequencer() {
 	trustedRelayers := ConnectToTrustedRelayers(context.Background(), rpctorelay)
 	isConnectedP2P := ConnectToSequencerP2P(trustedRelayers, rpctorelay)
 	if isConnectedP2P {
-		log.Debugln("Successfully connected to the Sequencer: ", rpctorelay.Network().Connectedness(SequencerId))
+		log.Debugln("Successfully connected to the Sequencer: ", rpctorelay.Network().Connectedness(peer.ID(config.SettingsObj.SequencerId)), isConnectedP2P)
 		return
 	} else {
 		log.Debugln("Failed to connect to the Sequencer")

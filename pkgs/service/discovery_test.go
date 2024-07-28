@@ -41,7 +41,7 @@ func TestFetchTrustedRelayers(t *testing.T) {
 	defer ts.Close()
 
 	// Call the function to test
-	relayers := fetchTrustedRelayers(ts.URL)
+	relayers := fetchTrustedRelayers("https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/relayers.json")
 
 	// Expected result
 	expected := []Relayer{
