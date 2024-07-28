@@ -1,33 +1,42 @@
 package service
 
 import (
+	"context"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"io"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"proto-snapshot-server/config"
 	"testing"
 )
 
 func TestConnectToSequencerP2P(t *testing.T) {
 	// Mock relayers data
-	relayers := []Relayer{
-		{
-			ID:              "QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm",
-			Name:            "Relayer1",
-			RendezvousPoint: "Relayer_POP_test_simulation_phase_1",
-			Maddr:           "/ip4/104.248.63.86/tcp/5001/p2p/QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm",
-		},
-		{
-			ID:              "QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj",
-			Name:            "Relayer2",
-			RendezvousPoint: "Relayer_POP_test_simulation_phase_1",
-			Maddr:           "/ip4/137.184.132.196/tcp/5001/p2p/QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj",
-		},
-	}
+	mockResponse := `[{
+		"id": "QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm",
+		"name": "Relayer1",
+		"rendezvousPoint": "Relayer_POP_test_simulation_phase_1",
+		"maddr": "/ip4/104.248.63.86/tcp/9100/p2p/QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm"
+	}, {
+		"id": "QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj",
+		"name": "Relayer2",
+		"rendezvousPoint": "Relayer_POP_test_simulation_phase_1",
+		"maddr": "/ip4/137.184.132.196/tcp/9100/p2p/QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj"
+	}]`
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, mockResponse)
+	}))
+
+	defer ts.Close()
 
 	// Initialize the configuration settings
 	config.SettingsObj = &config.Settings{
-		SequencerId: "QmdJbNsbHpFseUPKC9vLt4vMsfdxA4dyHPzsAWuzYz3Yxx",
+		TrustedRelayersListUrl: ts.URL,
+		SequencerId:            "QmdJbNsbHpFseUPKC9vLt4vMsfdxA4dyHPzsAWuzYz3Yxx",
 	}
 
 	host, err := libp2p.New()
@@ -35,6 +44,10 @@ func TestConnectToSequencerP2P(t *testing.T) {
 		t.Fatalf("Failed to create host: %v", err)
 	}
 	defer host.Close()
+
+	// Fetch the relayers
+	relayers := ConnectToTrustedRelayers(context.Background(), host)
+
 	// Test the function
 	result := ConnectToSequencerP2P(relayers, host)
 

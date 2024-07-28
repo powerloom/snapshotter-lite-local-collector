@@ -13,7 +13,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
@@ -71,18 +70,27 @@ func AddPeerConnection(ctx context.Context, host host.Host, relayerAddr string) 
 		log.Debugln("Failed to extract peer info from multiaddress:", err)
 	}
 
-	if host.Network().Connectedness(peerInfo.ID) != network.Connected {
+	if host.Network().Connectedness(peerInfo.ID) == network.Connected {
 		log.Debugln("Skipping connected relayer: ", peerInfo.ID)
 		return true
 	}
 
 	// Add the peer to the peerstore
-	host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, peerstore.PermanentAddrTTL)
+	//host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, peerstore.PermanentAddrTTL)
 
-	if err := backoff.Retry(func() error { return host.Connect(ctx, *peerInfo) }, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 1)); err != nil {
+	err = host.Connect(ctx, *peerInfo)
+	if err != nil {
 		log.Errorf("Failed to connect to relayer %s: %s", peerInfo.ID, err)
+		return false
+		if err := backoff.Retry(func() error { return host.Connect(ctx, *peerInfo) }, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 1)); err != nil {
+			log.Errorf("Failed to connect to relayer %s: %s", peerInfo.ID, err)
+		} else {
+			log.Infof("Connected to new relayer: %s", peerInfo.ID)
+			return true
+		}
 	} else {
 		log.Infof("Connected to new relayer: %s", peerInfo.ID)
+		log.Infoln("Connected: ", host.Network().ConnsToPeer(peerInfo.ID))
 		return true
 	}
 

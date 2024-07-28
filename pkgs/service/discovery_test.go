@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"proto-snapshot-server/config"
 	"testing"
-	"time"
 )
 
 type Settings struct {
@@ -50,13 +49,13 @@ func TestFetchTrustedRelayers(t *testing.T) {
 			ID:              "QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm",
 			Name:            "Relayer1",
 			RendezvousPoint: "Relayer_POP_test_simulation_phase_1",
-			Maddr:           "/ip4/104.248.63.86/tcp/5001/p2p/QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm",
+			Maddr:           "/ip4/104.248.63.86/tcp/9100/p2p/QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm",
 		},
 		{
 			ID:              "QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj",
 			Name:            "Relayer2",
 			RendezvousPoint: "Relayer_POP_test_simulation_phase_1",
-			Maddr:           "/ip4/137.184.132.196/tcp/5001/p2p/QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj",
+			Maddr:           "/ip4/137.184.132.196/tcp/9100/p2p/QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj",
 		},
 	}
 
@@ -92,12 +91,12 @@ func TestConnectToTrustedRelayers(t *testing.T) {
 		"id": "QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm",
 		"name": "Relayer1",
 		"rendezvousPoint": "Relayer_POP_test_simulation_phase_1",
-		"maddr": "/ip4/104.248.63.86/tcp/5001/p2p/QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm"
+		"maddr": "/ip4/104.248.63.86/tcp/9100/p2p/QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm"
 	}, {
 		"id": "QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj",
 		"name": "Relayer2",
 		"rendezvousPoint": "Relayer_POP_test_simulation_phase_1",
-		"maddr": "/ip4/137.184.132.196/tcp/5001/p2p/QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj"
+		"maddr": "/ip4/137.184.132.196/tcp/9100/p2p/QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj"
 	}]`
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +118,7 @@ func TestConnectToTrustedRelayers(t *testing.T) {
 
 	relayers := ConnectToTrustedRelayers(context.Background(), host)
 
-	time.Sleep(3 * time.Second)
+	//time.Sleep(3 * time.Second)
 
 	log.Println(host.Network().Connectedness(peer.ID(relayers[0].ID)))
 	log.Println(host.Network().Connectedness(peer.ID(relayers[1].ID)))
@@ -129,7 +128,7 @@ func TestConnectToTrustedRelayers(t *testing.T) {
 		Addrs: []ma.Multiaddr{ma.StringCast("/ip4/159.223.164.169/tcp/9100/p2p/QmdJbNsbHpFseUPKC9vLt4vMsfdxA4dyHPzsAWuzYz3Yxx")},
 	})
 
-	time.Sleep(3 * time.Second)
+	//time.Sleep(3 * time.Second)
 
 	log.Println(host.Network().Connectedness(peer.ID("QmdJbNsbHpFseUPKC9vLt4vMsfdxA4dyHPzsAWuzYz3Yxx")))
 	// TODO: FINISH THIS TEST
