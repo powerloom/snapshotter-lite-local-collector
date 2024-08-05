@@ -1,0 +1,10 @@
+{
+  "SequencerId": "QmdJbNsbHpFseUPKC9vLt4vMsfdxA4dyHPzsAWuzYz3Yxx",
+  "RelayerRendezvousPoint": "RELAYER_RENDEZVOUS_POINT",
+  "ClientRendezvousPoint": "CLIENT_RENDEZVOUS_POINT",
+  "RelayerPrivateKey": "RELAYER_PRIVATE_KEY",
+  "PowerloomReportingUrl": "POWERLOOM_REPORTING_URL",
+  "SignerAccountAddress": "SIGNER_ACCOUNT_ADDRESS",
+  "LocalCollectorPort": "LOCAL_COLLECTOR_PORT",
+  "TrustedRelayersListUrl" : "https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/relayers.json"
+}

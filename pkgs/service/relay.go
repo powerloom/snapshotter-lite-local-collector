@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	circuitv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	"proto-snapshot-server/config"
 	"time"
 
@@ -114,11 +115,19 @@ func ConfigureRelayer() {
 
 func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
 	for _, relayer := range relayers {
-		sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("%s/p2p/%s", relayer.Maddr, config.SettingsObj.SequencerId))
+		relayerMA, err := ma.NewMultiaddr(relayer.Maddr)
+		relayerInfo, err := peer.AddrInfoFromP2pAddr(relayerMA)
+		if reservation, err := circuitv2.Reserve(context.Background(), p2pHost, *relayerInfo); err != nil {
+			log.Fatalf("Failed to request reservation with relay: %v", err)
+		} else {
+			fmt.Println("Reservation with relay successful", reservation.Expiration, reservation.LimitDuration)
+		}
+		sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("%s/p2p-circuit/p2p/%s", relayer.Maddr, config.SettingsObj.SequencerId))
 
 		if err != nil {
 			log.Debugln(err.Error())
 		}
+
 		log.Debugln("Connecting to Sequencer: ", sequencerAddr.String())
 		isConnected := AddPeerConnection(context.Background(), p2pHost, sequencerAddr.String())
 		if isConnected {

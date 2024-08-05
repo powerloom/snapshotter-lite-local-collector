@@ -13,7 +13,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 )
@@ -50,15 +49,6 @@ func fetchTrustedRelayers(url string) []Relayer {
 	return relayers
 }
 
-func isVisited(id peer.ID, visited []peer.ID) bool {
-	for _, v := range visited {
-		if v == id {
-			return true
-		}
-	}
-	return false
-}
-
 func AddPeerConnection(ctx context.Context, host host.Host, relayerAddr string) bool {
 	stableRelayerMA, err := ma.NewMultiaddr(relayerAddr)
 	if err != nil {
@@ -74,9 +64,6 @@ func AddPeerConnection(ctx context.Context, host host.Host, relayerAddr string) 
 		log.Debugln("Skipping connected relayer: ", peerInfo.ID)
 		return true
 	}
-
-	// Add the peer to the peerstore
-	//host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, peerstore.PermanentAddrTTL)
 
 	err = host.Connect(ctx, *peerInfo)
 	if err != nil {
@@ -108,41 +95,6 @@ func ConnectToTrustedRelayers(ctx context.Context, host host.Host) []Relayer {
 	}
 
 	return connectedRelayers
-}
-
-func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscovery, rendezvousString string, host host.Host, visited []peer.ID) peer.ID {
-	//stableRelayer1 := "/ip4/104.248.63.86/tcp/5001/p2p/QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm"
-	//stableRelayer2 := "/ip4/137.184.132.196/tcp/5001/p2p/QmU3xwsjRqQR4pjJQ7Cxhcb2tiPvaJ6Z5AHDULq7hHWvvj"
-
-	peerChan, err := routingDiscovery.FindPeers(ctx, rendezvousString)
-
-	if err != nil {
-		log.Fatalf("Failed to find peers: %s", err)
-	}
-	log.Debugln("Triggering peer discovery")
-
-	log.Debugln("Skipping visited peers: ", visited)
-
-	for relayer := range peerChan {
-		if relayer.ID == host.ID() {
-			continue // Skip self or peers with no addresses
-		}
-
-		if host.Network().Connectedness(relayer.ID) != network.Connected {
-			// Connect to the relayer if not already connected
-			if err = backoff.Retry(func() error { return host.Connect(ctx, relayer) }, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 1)); err != nil {
-				log.Errorf("Failed to connect to relayer %s: %s", relayer.ID, err)
-			} else {
-				log.Infof("Connected to new relayer: %s", relayer.ID)
-				return relayer.ID
-			}
-		} else {
-			log.Debugln("Already connected to: ", relayer.ID)
-			// return relayer.ID
-		}
-	}
-	log.Debugln("Active connections: ", activeConnections)
-	return ""
 }
 
 func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
