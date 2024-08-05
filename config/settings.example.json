@@ -7,4 +7,5 @@
   "SignerAccountAddress": "SIGNER_ACCOUNT_ADDRESS",
   "LocalCollectorPort": "LOCAL_COLLECTOR_PORT",
   "TrustedRelayersListUrl" : "TRUSTED_RELAYERS_LIST_URL",
+  "SequencerNetworkPath" : "SEQUENCER_MULTIADDR"
 }

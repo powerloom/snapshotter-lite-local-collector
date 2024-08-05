@@ -138,16 +138,16 @@ func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
 }
 
 func ConnectToSequencer() {
-	trustedRelayers := ConnectToTrustedRelayers(context.Background(), rpctorelay)
-	isConnectedP2P := ConnectToSequencerP2P(trustedRelayers, rpctorelay)
-	if isConnectedP2P {
-		log.Debugln("Successfully connected to the Sequencer: ", rpctorelay.Network().Connectedness(peer.ID(config.SettingsObj.SequencerId)), isConnectedP2P)
-		return
-	} else {
-		log.Debugln("Failed to connect to the Sequencer")
-	}
+	//trustedRelayers := ConnectToTrustedRelayers(context.Background(), rpctorelay)
+	//isConnectedP2P := ConnectToSequencerP2P(trustedRelayers, rpctorelay)
+	//if isConnectedP2P {
+	//	log.Debugln("Successfully connected to the Sequencer: ", rpctorelay.Network().Connectedness(peer.ID(config.SettingsObj.SequencerId)), isConnectedP2P)
+	//	return
+	//} else {
+	//	log.Debugln("Failed to connect to the Sequencer")
+	//}
 
-	sequencerAddr, err := ma.NewMultiaddr("/ip4/159.223.164.169/tcp/9100/p2p/QmdJbNsbHpFseUPKC9vLt4vMsfdxA4dyHPzsAWuzYz3Yxx")
+	sequencerAddr, err := ma.NewMultiaddr(config.SettingsObj.SequencerNetworkPath)
 	if err != nil {
 		log.Debugln(err.Error())
 		return

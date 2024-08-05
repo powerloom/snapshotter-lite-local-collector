@@ -21,6 +21,14 @@ if [ -z "$LOCAL_COLLECTOR_PORT" ]; then
     echo "LOCAL_COLLECTOR_PORT not found, please set this in your .env!";
     exit 1;
 fi
+if [ -z "$SEQUENCER_MULTIADDR" ]; then
+    echo "SEQUENCER_MULTIADDR not found, please set this in your .env!";
+    exit 1;
+fi
+if [ -z "$TRUSTED_RELAYERS_LIST_URL" ]; then
+    echo "TRUSTED_RELAYERS_LIST_URL not found, please set this in your .env!";
+    exit 1;
+fi
 cd config
 
 # Template to actual settings.json manipulation
@@ -43,7 +51,9 @@ sed -i'.backup' -e "s#SEQUENCER_ID#$SEQUENCER_ID#" \
                 -e "s#POWERLOOM_REPORTING_URL#$POWERLOOM_REPORTING_URL#" \
                 -e "s#SIGNER_ACCOUNT_ADDRESS#$SIGNER_ACCOUNT_ADDRESS#" \
                 -e "s#LOCAL_COLLECTOR_PORT#$LOCAL_COLLECTOR_PORT#" \
-                -e "s#RELAYER_PRIVATE_KEY#$RELAYER_PRIVATE_KEY#" settings.json
+                -e "s#RELAYER_PRIVATE_KEY#$RELAYER_PRIVATE_KEY#" settings.json \
+                -e "s#SEQUENCER_MULTIADDR#$SEQUENCER_MULTIADDR#" \
+                -e "s#TRUSTED_RELAYERS_LIST_URL#$TRUSTED_RELAYERS_LIST_URL#" settings.json
 
 # Cleanup backup file
 rm settings.json.backup
