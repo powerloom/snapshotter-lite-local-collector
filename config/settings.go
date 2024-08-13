@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	log "github.com/sirupsen/logrus"
 	"os"
-	"strings"
 )
 
 var SettingsObj *Settings
@@ -18,11 +17,13 @@ type Settings struct {
 	SignerAccountAddress   string `json:"SignerAccountAddress"`
 	PortNumber             string `json:"LocalCollectorPort"`
 	TrustedRelayersListUrl string `json:"TrustedRelayersListUrl"`
-	SequencerNetworkPath   string `json:"SequencerNetworkPath"`
+	SequencerNetworkPath   string `json:"Sequencers"`
+	DataMarketAddress      string `json:"DataMarketAddress"`
 }
 
 func LoadConfig() {
-	file, err := os.Open(strings.TrimSuffix(os.Getenv("CONFIG_PATH"), "/") + "/config/settings.json")
+	//file, err := os.Open(strings.TrimSuffix(os.Getenv("CONFIG_PATH"), "/") + "/config/settings.json")
+	file, err := os.Open("/Users/sulejmansarajlija/IdeaProjects/powerloom/snapshotter-lite-local-collector/config/settings.json")
 	if err != nil {
 		log.Fatalf("Failed to open config file: %v", err)
 	}
