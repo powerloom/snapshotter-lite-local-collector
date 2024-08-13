@@ -147,10 +147,26 @@ func ConnectToSequencer() {
 	//	log.Debugln("Failed to connect to the Sequencer")
 	//}
 
-	sequencerAddr, err := ma.NewMultiaddr(config.SettingsObj.SequencerNetworkPath)
-	if err != nil {
-		log.Debugln(err.Error())
-		return
+	var sequencerAddr ma.Multiaddr
+	var err error
+
+	if config.SettingsObj.SequencerNetworkPath != "" {
+		sequencerAddr, err = ma.NewMultiaddr(config.SettingsObj.SequencerNetworkPath)
+		if err != nil {
+			log.Debugln(err.Error())
+			return
+		}
+	} else {
+		sequencer, err := fetchSequencer("https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/sequencers.json", config.SettingsObj.DataMarketAddress)
+		if err != nil {
+			log.Debugln(err.Error())
+		}
+		config.SettingsObj.SequencerNetworkPath = sequencer.Maddr
+		sequencerAddr, err = ma.NewMultiaddr(sequencer.Maddr)
+		if err != nil {
+			log.Debugln(err.Error())
+			return
+		}
 	}
 
 	sequencerInfo, err := peer.AddrInfoFromP2pAddr(sequencerAddr)

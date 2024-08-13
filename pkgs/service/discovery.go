@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"github.com/pkg/errors"
 	"io"
 	"net/http"
 	"proto-snapshot-server/config"
@@ -22,6 +23,48 @@ type Relayer struct {
 	Name            string `json:"name"`
 	RendezvousPoint string `json:"rendezvousPoint"`
 	Maddr           string `json:"maddr"`
+}
+
+type Sequencer struct {
+	ID                string `json:"id"`
+	Maddr             string `json:"maddr"`
+	DataMarketAddress string `json:"dataMarketAddress"`
+	Environment       string `json:"environment"`
+}
+
+func fetchSequencer(url string, dataMarketAddress string) (Sequencer, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Fatalf("Failed to fetch JSON: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Debugf("Failed to read response body: %v", err)
+	}
+
+	var sequencers []Sequencer
+	err = json.Unmarshal(body, &sequencers)
+	if err != nil {
+		log.Debugln("Failed to unmarshal JSON:", err)
+	}
+
+	for _, sequencer := range sequencers {
+		log.Debugf(
+			"ID: %s, Maddr: %s, Data Market Address: %s, Environment: %s\n",
+			sequencer.ID,
+			sequencer.Maddr,
+			sequencer.DataMarketAddress,
+			sequencer.Environment,
+		)
+
+		if sequencer.DataMarketAddress == dataMarketAddress {
+			return sequencer, nil
+		}
+	}
+
+	return Sequencer{}, errors.New("Sequencer not found")
 }
 
 func fetchTrustedRelayers(url string) []Relayer {
