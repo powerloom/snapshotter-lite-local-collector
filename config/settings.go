@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	log "github.com/sirupsen/logrus"
 	"os"
+	"strings"
 )
 
 var SettingsObj *Settings
@@ -22,8 +23,7 @@ type Settings struct {
 }
 
 func LoadConfig() {
-	//file, err := os.Open(strings.TrimSuffix(os.Getenv("CONFIG_PATH"), "/") + "/config/settings.json")
-	file, err := os.Open("/Users/sulejmansarajlija/IdeaProjects/powerloom/snapshotter-lite-local-collector/config/settings.json")
+	file, err := os.Open(strings.TrimSuffix(os.Getenv("CONFIG_PATH"), "/") + "/config/settings.json")
 	if err != nil {
 		log.Fatalf("Failed to open config file: %v", err)
 	}
