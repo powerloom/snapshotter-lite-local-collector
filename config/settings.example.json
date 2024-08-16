@@ -1,7 +1,4 @@
 {
-  "SequencerId": "SEQUENCER_ID",
-  "RelayerRendezvousPoint": "RELAYER_RENDEZVOUS_POINT",
-  "ClientRendezvousPoint": "CLIENT_RENDEZVOUS_POINT",
   "RelayerPrivateKey": "RELAYER_PRIVATE_KEY",
   "PowerloomReportingUrl": "POWERLOOM_REPORTING_URL",
   "SignerAccountAddress": "SIGNER_ACCOUNT_ADDRESS",
