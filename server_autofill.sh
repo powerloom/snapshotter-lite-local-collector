@@ -21,8 +21,8 @@ if [ -z "$LOCAL_COLLECTOR_PORT" ]; then
     echo "LOCAL_COLLECTOR_PORT not found, please set this in your .env!";
     exit 1;
 fi
-if [ -z "$DATA_MARKET_ADDRESS" ]; then
-    echo "DATA_MARKET_ADDRESS not found, please set this in your .env!";
+if [ -z "$DATA_MARKET_CONTRACT" ]; then
+    echo "DATA_MARKET_CONTRACT not found, please set this in your .env!";
     exit 1;
 fi
 if [ -z "$SEQUENCER_MULTIADDR" ]; then
@@ -58,7 +58,7 @@ sed -i'.backup' -e "s#SEQUENCER_ID#$SEQUENCER_ID#" \
                 -e "s#RELAYER_PRIVATE_KEY#$RELAYER_PRIVATE_KEY#" settings.json \
                 -e "s#SEQUENCER_MULTIADDR#$SEQUENCER_MULTIADDR#" \
                 -e "s#TRUSTED_RELAYERS_LIST_URL#$TRUSTED_RELAYERS_LIST_URL#" settings.json \
-                -e "s#DATA_MARKET_ADDRESS#$DATA_MARKET_ADDRESS#" settings.json
+                -e "s#DATA_MARKET_CONTRACT#$DATA_MARKET_CONTRACT#" settings.json
 
 # Cleanup backup file
 rm settings.json.backup
