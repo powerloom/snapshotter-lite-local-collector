@@ -68,10 +68,6 @@ func mustSetStream(s *server) error {
 		// return nil
 		var err = setNewStream(s)
 		if err != nil {
-			if len(visitedPeers) >= len(trustedPeers) {
-				log.Debugln("Resetting visitedPeers: ", len(visitedPeers))
-				visitedPeers = []peer.ID{}
-			}
 			log.Errorln(err.Error())
 			// 	connectedPeer = ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, peers)
 			// 	if len(connectedPeer.String()) > 0 {

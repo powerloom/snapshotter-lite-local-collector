@@ -3,13 +3,13 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"github.com/pkg/errors"
 	"io"
 	"net/http"
 	"proto-snapshot-server/config"
 	"sync"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/pkg/errors"
+
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -112,12 +112,6 @@ func AddPeerConnection(ctx context.Context, host host.Host, relayerAddr string) 
 	if err != nil {
 		log.Errorf("Failed to connect to relayer %s: %s", peerInfo.ID, err)
 		return false
-		if err := backoff.Retry(func() error { return host.Connect(ctx, *peerInfo) }, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 1)); err != nil {
-			log.Errorf("Failed to connect to relayer %s: %s", peerInfo.ID, err)
-		} else {
-			log.Infof("Connected to new relayer: %s", peerInfo.ID)
-			return true
-		}
 	} else {
 		log.Infof("Connected to new relayer: %s", peerInfo.ID)
 		log.Infoln("Connected: ", host.Network().ConnsToPeer(peerInfo.ID))
