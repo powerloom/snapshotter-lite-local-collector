@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	circuitv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	"proto-snapshot-server/config"
 	"time"
 
@@ -107,19 +109,64 @@ func ConfigureRelayer() {
 	// 	return
 	// }
 	// ConnectToSequencer(peerId)
+
 	ConnectToSequencer()
 }
 
+func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
+	for _, relayer := range relayers {
+		relayerMA, err := ma.NewMultiaddr(relayer.Maddr)
+		relayerInfo, err := peer.AddrInfoFromP2pAddr(relayerMA)
+		if reservation, err := circuitv2.Reserve(context.Background(), p2pHost, *relayerInfo); err != nil {
+			log.Fatalf("Failed to request reservation with relay: %v", err)
+		} else {
+			fmt.Println("Reservation with relay successful", reservation.Expiration, reservation.LimitDuration)
+		}
+		sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("%s/p2p-circuit/p2p/%s", relayer.Maddr, config.SettingsObj.SequencerId))
+
+		if err != nil {
+			log.Debugln(err.Error())
+		}
+
+		log.Debugln("Connecting to Sequencer: ", sequencerAddr.String())
+		isConnected := AddPeerConnection(context.Background(), p2pHost, sequencerAddr.String())
+		if isConnected {
+			return true
+		}
+	}
+	return false
+}
+
 func ConnectToSequencer() {
-	// if peerId == "" {
-	// 	log.Debugln("Not connected to a relayer")
-	// 	return
-	// }
-	// sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit/p2p/%s", peerId, config.SettingsObj.SequencerId))
-	sequencerAddr, err := ma.NewMultiaddr("/ip4/159.223.164.169/tcp/9100/p2p/QmdJbNsbHpFseUPKC9vLt4vMsfdxA4dyHPzsAWuzYz3Yxx")
-	if err != nil {
-		log.Debugln(err.Error())
-		return
+	//trustedRelayers := ConnectToTrustedRelayers(context.Background(), rpctorelay)
+	//isConnectedP2P := ConnectToSequencerP2P(trustedRelayers, rpctorelay)
+	//if isConnectedP2P {
+	//	log.Debugln("Successfully connected to the Sequencer: ", rpctorelay.Network().Connectedness(peer.ID(config.SettingsObj.SequencerId)), isConnectedP2P)
+	//	return
+	//} else {
+	//	log.Debugln("Failed to connect to the Sequencer")
+	//}
+
+	var sequencerAddr ma.Multiaddr
+	var err error
+
+	if config.SettingsObj.SequencerNetworkPath != "" {
+		sequencerAddr, err = ma.NewMultiaddr(config.SettingsObj.SequencerNetworkPath)
+		if err != nil {
+			log.Debugln(err.Error())
+			return
+		}
+	} else {
+		sequencer, err := fetchSequencer("https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/sequencers.json", config.SettingsObj.DataMarketAddress)
+		if err != nil {
+			log.Debugln(err.Error())
+		}
+		config.SettingsObj.SequencerNetworkPath = sequencer.Maddr
+		sequencerAddr, err = ma.NewMultiaddr(sequencer.Maddr)
+		if err != nil {
+			log.Debugln(err.Error())
+			return
+		}
 	}
 
 	sequencerInfo, err := peer.AddrInfoFromP2pAddr(sequencerAddr)
