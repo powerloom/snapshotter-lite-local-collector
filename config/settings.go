@@ -17,6 +17,9 @@ type Settings struct {
 	PowerloomReportingUrl  string `json:"PowerloomReportingUrl"`
 	SignerAccountAddress   string `json:"SignerAccountAddress"`
 	PortNumber             string `json:"LocalCollectorPort"`
+	TrustedRelayersListUrl string `json:"TrustedRelayersListUrl"`
+	SequencerNetworkPath   string `json:"Sequencers"`
+	DataMarketAddress      string `json:"DataMarketAddress"`
 }
 
 func LoadConfig() {
@@ -37,5 +40,10 @@ func LoadConfig() {
 	if err != nil {
 		log.Fatalf("Failed to decode config file: %v", err)
 	}
+
+	if config.TrustedRelayersListUrl == "" {
+		config.TrustedRelayersListUrl = "https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/relayers.json"
+	}
+
 	SettingsObj = &config
 }

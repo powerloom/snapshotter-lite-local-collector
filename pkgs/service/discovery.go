@@ -2,66 +2,142 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"github.com/pkg/errors"
+	"io"
+	"net/http"
+	"proto-snapshot-server/config"
+	"sync"
+
 	"github.com/cenkalti/backoff/v4"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
-	"sync"
 )
 
-var trustedPeers = []string{"QmWG6hesiCV5uFJwPaThtSrfnwEnwQovuXHJB6j6j7p4TL", "QmaNQc1MbGzrwbmUytPfikkrJeJ5sZF24ZZa47RGRnYoo8", "QmcAu8nGPkC9wcvT8kzigWGRgbAXRxVakpxfkSTT7h9Qqo", "QmYsHDQTqMctz59UCmvyDMnShHSm7T1iYJAL3FwBL3qFVL", "QmVQqgyHDVxY5X4wLHCC4HrgPnFXNWxXzeAEcBgUeDmPxT"}
-
-func isVisited(id peer.ID, visited []peer.ID) bool {
-	for _, v := range visited {
-		if v == id {
-			return true
-		}
-	}
-	return false
+type Relayer struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	RendezvousPoint string `json:"rendezvousPoint"`
+	Maddr           string `json:"maddr"`
 }
 
-func isTrusted(id string) bool {
-	for _, peer := range trustedPeers {
-		if peer == id {
-			return true
-		}
-	}
-	return false
+type Sequencer struct {
+	ID                string `json:"id"`
+	Maddr             string `json:"maddr"`
+	DataMarketAddress string `json:"dataMarketAddress"`
+	Environment       string `json:"environment"`
 }
 
-func ConnectToPeer(ctx context.Context, routingDiscovery *routing.RoutingDiscovery, rendezvousString string, host host.Host, visited []peer.ID) peer.ID {
-	peerChan, err := routingDiscovery.FindPeers(ctx, rendezvousString)
+func fetchSequencer(url string, dataMarketAddress string) (Sequencer, error) {
+	resp, err := http.Get(url)
 	if err != nil {
-		log.Fatalf("Failed to find peers: %s", err)
+		log.Fatalf("Failed to fetch JSON: %v", err)
 	}
-	log.Debugln("Triggering peer discovery")
+	defer resp.Body.Close()
 
-	for relayer := range peerChan {
-		if relayer.ID == host.ID() || isVisited(relayer.ID, visited) || !isTrusted(relayer.ID.String()) {
-			if isVisited(relayer.ID, visited) {
-				log.Debugln("Skipping visited peer: ", relayer.ID.String())
-			}
-			continue // Skip self or peers with no addresses
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Debugf("Failed to read response body: %v", err)
+	}
+
+	var sequencers []Sequencer
+	err = json.Unmarshal(body, &sequencers)
+	if err != nil {
+		log.Debugln("Failed to unmarshal JSON:", err)
+	}
+
+	for _, sequencer := range sequencers {
+		log.Debugf(
+			"ID: %s, Maddr: %s, Data Market Address: %s, Environment: %s\n",
+			sequencer.ID,
+			sequencer.Maddr,
+			sequencer.DataMarketAddress,
+			sequencer.Environment,
+		)
+
+		if sequencer.DataMarketAddress == dataMarketAddress {
+			return sequencer, nil
 		}
+	}
 
-		if host.Network().Connectedness(relayer.ID) != network.Connected {
-			// Connect to the relayer if not already connected
-			if err = backoff.Retry(func() error { return host.Connect(ctx, relayer) }, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 2)); err != nil {
-				log.Errorf("Failed to connect to relayer %s: %s", relayer.ID, err)
-			} else {
-				log.Infof("Connected to new relayer: %s", relayer.ID)
-				return relayer.ID
-			}
+	return Sequencer{}, errors.New("Sequencer not found")
+}
+
+func fetchTrustedRelayers(url string) []Relayer {
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Fatalf("Failed to fetch JSON: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Debugf("Failed to read response body: %v", err)
+	}
+
+	var relayers []Relayer
+	err = json.Unmarshal(body, &relayers)
+	if err != nil {
+		log.Debugln("Failed to unmarshal JSON:", err)
+	}
+
+	for _, relayer := range relayers {
+		log.Debugf("ID: %s, Name: %s, Rendezvous Point: %s, Maddr: %s\n", relayer.ID, relayer.Name, relayer.RendezvousPoint, relayer.Maddr)
+	}
+
+	return relayers
+}
+
+func AddPeerConnection(ctx context.Context, host host.Host, relayerAddr string) bool {
+	stableRelayerMA, err := ma.NewMultiaddr(relayerAddr)
+	if err != nil {
+		log.Debugln("Failed to parse stable peer multiaddress: ", err)
+	}
+
+	peerInfo, err := peer.AddrInfoFromP2pAddr(stableRelayerMA)
+	if err != nil {
+		log.Debugln("Failed to extract peer info from multiaddress:", err)
+	}
+
+	if host.Network().Connectedness(peerInfo.ID) == network.Connected {
+		log.Debugln("Skipping connected relayer: ", peerInfo.ID)
+		return true
+	}
+
+	err = host.Connect(ctx, *peerInfo)
+	if err != nil {
+		log.Errorf("Failed to connect to relayer %s: %s", peerInfo.ID, err)
+		return false
+		if err := backoff.Retry(func() error { return host.Connect(ctx, *peerInfo) }, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 1)); err != nil {
+			log.Errorf("Failed to connect to relayer %s: %s", peerInfo.ID, err)
 		} else {
-			log.Debugln("Already connected to: ", relayer.ID)
-			return relayer.ID
+			log.Infof("Connected to new relayer: %s", peerInfo.ID)
+			return true
+		}
+	} else {
+		log.Infof("Connected to new relayer: %s", peerInfo.ID)
+		log.Infoln("Connected: ", host.Network().ConnsToPeer(peerInfo.ID))
+		return true
+	}
+
+	return false
+}
+
+func ConnectToTrustedRelayers(ctx context.Context, host host.Host) []Relayer {
+	relayers := fetchTrustedRelayers(config.SettingsObj.TrustedRelayersListUrl)
+	var connectedRelayers []Relayer
+
+	for _, relayer := range relayers {
+		if AddPeerConnection(ctx, host, relayer.Maddr) {
+			connectedRelayers = append(connectedRelayers, relayer)
 		}
 	}
-	log.Debugln("Active connections: ", activeConnections)
-	return ""
+
+	return connectedRelayers
 }
 
 func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
