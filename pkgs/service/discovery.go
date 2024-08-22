@@ -117,8 +117,6 @@ func AddPeerConnection(ctx context.Context, host host.Host, relayerAddr string) 
 		log.Infoln("Connected: ", host.Network().ConnsToPeer(peerInfo.ID))
 		return true
 	}
-
-	return false
 }
 
 func ConnectToTrustedRelayers(ctx context.Context, host host.Host) []Relayer {
