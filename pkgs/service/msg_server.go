@@ -78,7 +78,7 @@ func mustSetStream(s *server) error {
 		}
 		return nil
 	}
-	return backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 3))
+	return backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 1))
 }
 
 func TryConnection(s *server) error {

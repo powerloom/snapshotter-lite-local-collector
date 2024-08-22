@@ -2,9 +2,10 @@ package config
 
 import (
 	"encoding/json"
-	log "github.com/sirupsen/logrus"
 	"os"
 	"strings"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var SettingsObj *Settings
@@ -18,7 +19,6 @@ type Settings struct {
 	SignerAccountAddress   string `json:"SignerAccountAddress"`
 	PortNumber             string `json:"LocalCollectorPort"`
 	TrustedRelayersListUrl string `json:"TrustedRelayersListUrl"`
-	SequencerNetworkPath   string `json:"Sequencers"`
 	DataMarketAddress      string `json:"DataMarketAddress"`
 }
 
