@@ -34,7 +34,6 @@ sed -i'.backup' -e "s#POWERLOOM_REPORTING_URL#$POWERLOOM_REPORTING_URL#" \
                 -e "s#SIGNER_ACCOUNT_ADDRESS#$SIGNER_ACCOUNT_ADDRESS#" \
                 -e "s#LOCAL_COLLECTOR_PORT#$LOCAL_COLLECTOR_PORT#" \
                 -e "s#RELAYER_PRIVATE_KEY#$RELAYER_PRIVATE_KEY#" settings.json \
-                -e "s#SEQUENCER_MULTIADDR#$SEQUENCER_MULTIADDR#" \
                 -e "s#TRUSTED_RELAYERS_LIST_URL#$TRUSTED_RELAYERS_LIST_URL#" settings.json \
                 -e "s#DATA_MARKET_CONTRACT#$DATA_MARKET_CONTRACT#" settings.json
 
