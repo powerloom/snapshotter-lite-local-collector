@@ -23,3 +23,5 @@ RUN ./build.sh
 RUN cp settings.example.json settings.json
 
 RUN chmod +x init_processes.sh
+
+ENTRYPOINT ["/bin/bash", "-c", "docker-entrypoint.sh"]
