@@ -17,7 +17,6 @@ fi
 cd config
 
 # Template to actual settings.json manipulation
-cp settings.example.json settings.json
 
 priv_key="/keys/key.txt"
 

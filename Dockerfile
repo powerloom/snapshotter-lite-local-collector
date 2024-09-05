@@ -20,4 +20,6 @@ COPY . .
 RUN chmod +x build.sh
 RUN ./build.sh
 
+RUN cp settings.example.json settings.json
+
 RUN chmod +x init_processes.sh
