@@ -137,7 +137,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			log.Errorln("Failed to write to stream: ", err.Error())
 			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
 		}
-		log.Debugln("Stream write successful for ID: ", submissionId.String())
+		log.Debugln("Stream write successful for ID: ", submissionId.String(), "for Epoch:", submission.Request.EpochId, "Slot:", submission.Request.SlotId)
 
 	}
 }
@@ -174,7 +174,7 @@ func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotS
 			if err != nil {
 				if err == io.EOF {
 					log.Debugln("EOF reached")
-					return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
+					return nil
 				}
 				if strings.Contains(err.Error(), "context canceled") {
 					log.Debugln("Stream ended by client")
