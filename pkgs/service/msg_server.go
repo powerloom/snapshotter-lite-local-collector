@@ -88,6 +88,15 @@ func TryConnection(s *server) error {
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
 	defer stream.Context().Done()
+	mu.Lock()
+	if s.stream == nil || s.stream.Conn().IsClosed() {
+		if err := TryConnection(s); err != nil {
+			log.Errorln("Unexpected connection error: ", err.Error())
+			mu.Unlock()
+			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
+		}
+	}
+	mu.Unlock()
 	var submissionId uuid.UUID
 	for {
 		submission, err := stream.Recv()
@@ -96,28 +105,17 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			switch {
 			case err == io.EOF:
 				log.Debugln("EOF reached")
+				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
 			case strings.Contains(err.Error(), "context canceled"):
 				log.Errorln("Stream ended by client: ")
+				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
 			default:
 				log.Errorln("Unexpected stream error: ", err.Error())
 				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
 			}
-
-			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
 		}
 
 		log.Debugln("Received submission with request: ", submission.Request)
-
-		mu.Lock()
-		if s.stream == nil || s.stream.Conn().IsClosed() {
-			if err := TryConnection(s); err != nil {
-				log.Errorln("Unexpected connection error: ", err.Error())
-				ReportingInstance.SendFailureNotification(submission.Request, fmt.Sprintf("Unexpected connection error: %s", err.Error()))
-				mu.Unlock()
-				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
-			}
-		}
-		mu.Unlock()
 
 		submissionId = uuid.New() // Generates a new UUID
 		submissionIdBytes, err := submissionId.MarshalText()
@@ -131,7 +129,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 		submissionBytes := append(submissionIdBytes, subBytes...)
 		if err != nil {
 			log.Debugln("Could not marshal submission")
-			return err
+			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
 		}
 		if _, err = s.stream.Write(submissionBytes); err != nil {
 			log.Debugln("Stream write error: ", err.Error())
@@ -153,9 +151,8 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 				return err
 			}, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 2))
 			if err != nil {
-				stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
 				log.Errorln("Failed to write to stream: ", err.Error())
-				return err
+				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
 			} else {
 				log.Debugln("Stream write successful")
 			}
