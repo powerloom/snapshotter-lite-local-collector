@@ -138,6 +138,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
 		}
 		log.Debugln("Stream write successful for ID: ", submissionId.String())
+
 	}
 }
 
@@ -163,65 +164,66 @@ func (s *server) writeToStream(data []byte) error {
 }
 
 func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotSimulationServer) error {
-	defer stream.Context().Done()
-	mu.Lock()
-	if s.stream == nil || s.stream.Conn().IsClosed() {
-		if err := TryConnection(s); err != nil {
-			log.Errorln("Unexpected connection error: ", err.Error())
-			mu.Unlock()
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
-		}
-	}
-	mu.Unlock()
-
 	for {
-		submission, err := stream.Recv()
-
-		if err != nil {
-			switch {
-			case err == io.EOF:
-				log.Debugln("EOF reached")
-				return nil
-			case strings.Contains(err.Error(), "context canceled"):
-				log.Errorln("Stream ended by client")
-				return nil
-			default:
+		select {
+		case <-stream.Context().Done():
+			log.Debugln("Stream context done")
+			return nil
+		default:
+			submission, err := stream.Recv()
+			if err != nil {
+				if err == io.EOF {
+					log.Debugln("EOF reached")
+					return nil
+				}
+				if strings.Contains(err.Error(), "context canceled") {
+					log.Debugln("Stream ended by client")
+					return nil
+				}
 				log.Errorln("Unexpected stream error: ", err.Error())
-				return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
+				return err
 			}
-		}
 
-		log.Debugln("Received submission with request: ", submission.Request)
+			log.Debugln("Received submission with request: ", submission.Request)
 
-		submissionId := uuid.New()
-		submissionIdBytes, err := submissionId.MarshalText()
-		if err != nil {
-			log.Errorln("Error marshalling submissionId: ", err.Error())
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
-		}
+			submissionId := uuid.New()
+			submissionIdBytes, err := submissionId.MarshalText()
+			if err != nil {
+				log.Errorln("Error marshalling submissionId: ", err.Error())
+				if err := stream.Send(&pkgs.SubmissionResponse{Message: "Failure"}); err != nil {
+					log.Errorln("Failed to send error response: ", err.Error())
+				}
+				continue
+			}
 
-		subBytes, err := json.Marshal(submission)
-		if err != nil {
-			log.Errorln("Could not marshal submission: ", err.Error())
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
-		}
+			subBytes, err := json.Marshal(submission)
+			if err != nil {
+				log.Errorln("Could not marshal submission: ", err.Error())
+				if err := stream.Send(&pkgs.SubmissionResponse{Message: "Failure"}); err != nil {
+					log.Errorln("Failed to send error response: ", err.Error())
+				}
+				continue
+			}
 
-		log.Debugln("Sending submission with ID: ", submissionId.String())
+			log.Debugln("Sending submission with ID: ", submissionId.String())
 
-		submissionBytes := append(submissionIdBytes, subBytes...)
-		
-		err = s.writeToStream(submissionBytes)
-		if err != nil {
-			log.Errorln("Failed to write to stream: ", err.Error())
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
-		}
+			submissionBytes := append(submissionIdBytes, subBytes...)
 
-		log.Debugln("Stream write successful for ID: ", submissionId.String())
+			err = s.writeToStream(submissionBytes)
+			if err != nil {
+				log.Errorln("Failed to write to stream: ", err.Error())
+				if err := stream.Send(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()}); err != nil {
+					log.Errorln("Failed to send error response: ", err.Error())
+				}
+				continue
+			}
 
-		// Send success response for this submission
-		if err := stream.Send(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()}); err != nil {
-			log.Errorln("Failed to send response: ", err.Error())
-			return err
+			log.Debugln("Stream write successful for ID: ", submissionId.String(), "for Epoch:", submission.Request.EpochId, "Slot:", submission.Request.SlotId)
+			// Send success response for this submission
+			if err := stream.Send(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()}); err != nil {
+				log.Errorln("Failed to send success response: ", err.Error())
+				return err
+			}
 		}
 	}
 }
