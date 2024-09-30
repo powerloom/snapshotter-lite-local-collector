@@ -174,7 +174,7 @@ func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotS
 			if err != nil {
 				if err == io.EOF {
 					log.Debugln("EOF reached")
-					return nil
+					return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
 				}
 				if strings.Contains(err.Error(), "context canceled") {
 					log.Debugln("Stream ended by client")
