@@ -12,10 +12,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
+	ma "github.com/multiformats/go-multiaddr"
 	"github.com/sethvargo/go-retry"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -36,109 +37,107 @@ func NewMsgServerImpl() pkgs.SubmissionServer {
 	return &server{}
 }
 
-func setNewStream(s *server) error {
+func (s *server) TryConnection() error {
+	var sequencerAddr ma.Multiaddr
+	var err error
+
+	sequencer, err := fetchSequencer("https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/sequencers.json", config.SettingsObj.DataMarketAddress)
+	if err != nil {
+		log.Debugln(err.Error())
+	}
+	sequencerAddr, err = ma.NewMultiaddr(sequencer.Maddr)
+	if err != nil {
+		log.Debugln(err.Error())
+		return err
+	}
+	sequencerInfo, err := peer.AddrInfoFromP2pAddr(sequencerAddr)
+
+	if err != nil {
+		log.Errorln("Error converting MultiAddr to AddrInfo: ", err.Error())
+	}
+
+	SequencerId = sequencerInfo.ID
 	operation := func() error {
-		st, err := rpctorelay.NewStream(network.WithUseTransient(context.Background(), "collect"), SequencerId, "/collect")
+		// Open a new stream to the sequencer
+		stream, err := rpctorelay.NewStream(
+			network.WithUseTransient(context.Background(), "collect"),
+			sequencerInfo.ID,
+			"/collect",
+		)
 		if err != nil {
-			log.Debugln("unable to establish stream: ", err.Error())
-			ConnectToSequencer()
-			return retry.RetryableError(err) // Mark the error as retryable
+			log.Debugln("Unable to establish stream: ", err.Error())
+			return retry.RetryableError(err)
 		}
-		s.stream = st
+
+		// Set the new stream
+		s.stream = stream
+		log.Debugln("Stream established successfully to sequencer: ", sequencerAddr)
 		return nil
 	}
 
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = time.Second
-	if err := backoff.Retry(operation, backoff.WithMaxRetries(bo, 2)); err != nil {
-		return errors.New(fmt.Sprintf("Failed to establish stream after retries: %s", err.Error()))
-	} else {
-		log.Debugln("Stream established successfully")
-	}
-	return nil
-}
+	bo.MaxElapsedTime = 1 * time.Minute // Adjust as needed
 
-// TODO: Maintain a global list of visited peers and continue connection establishment from the last accepted peer; refresh the list only when all the peers have been visited
-func mustSetStream(s *server) error {
-	// var peers []peer.ID
-	// var connectedPeer peer.ID
-	// var err error
-	operation := func() error {
-		ConnectToSequencer()
-		// return nil
-		var err = setNewStream(s)
-		if err != nil {
-			log.Errorln(err.Error())
-			// 	connectedPeer = ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, peers)
-			// 	if len(connectedPeer.String()) > 0 {
-			// 		peers = append(peers, connectedPeer)
-			ConnectToSequencer()
-		} else {
-			return err
-		}
-		return nil
-	}
-	return backoff.Retry(operation, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 1))
-}
-
-func TryConnection(s *server) error {
-	ConnectToSequencer()
-	return mustSetStream(s)
+	return backoff.Retry(operation, bo)
 }
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
-	defer stream.Context().Done()
 	mu.Lock()
 	if s.stream == nil || s.stream.Conn().IsClosed() {
-		if err := TryConnection(s); err != nil {
+		if err := s.TryConnection(); err != nil {
 			log.Errorln("Unexpected connection error: ", err.Error())
 			mu.Unlock()
-			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
+			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure: Unable to connect to sequencer"})
 		}
 	}
 	mu.Unlock()
-	for {
-		submission, err := stream.Recv()
 
-		if err != nil {
-			switch {
-			case err == io.EOF:
-				log.Debugln("EOF reached")
-				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
-			case strings.Contains(err.Error(), "context canceled"):
-				log.Errorln("Stream ended by client: ")
-				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
-			default:
+	for {
+		select {
+		case <-stream.Context().Done():
+			log.Debugln("Stream context done")
+			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
+		default:
+			submission, err := stream.Recv()
+			if err != nil {
+				if err == io.EOF {
+					log.Debugln("EOF reached")
+					return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
+				}
+				if strings.Contains(err.Error(), "context canceled") {
+					log.Debugln("Stream ended by client")
+					return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
+				}
 				log.Errorln("Unexpected stream error: ", err.Error())
 				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
 			}
+
+			log.Debugln("Received submission with request: ", submission.Request)
+
+			submissionId := uuid.New()
+			submissionIdBytes, err := submissionId.MarshalText()
+			if err != nil {
+				log.Errorln("Error marshalling submissionId: ", err.Error())
+				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
+			}
+
+			subBytes, err := json.Marshal(submission)
+			if err != nil {
+				log.Errorln("Could not marshal submission: ", err.Error())
+				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
+			}
+			log.Debugln("Sending submission with ID: ", submissionId.String())
+
+			submissionBytes := append(submissionIdBytes, subBytes...)
+
+			err = s.writeToStream(submissionBytes)
+			if err != nil {
+				log.Errorln("Failed to write to stream: ", err.Error())
+				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
+			}
+			log.Debugln("Stream write successful for ID: ", submissionId.String(), "for Epoch:", submission.Request.EpochId, "Slot:", submission.Request.SlotId)
 		}
-
-		log.Debugln("Received submission with request: ", submission.Request)
-
-		submissionId := uuid.New()
-		submissionIdBytes, err := submissionId.MarshalText()
-		if err != nil {
-			log.Errorln("Error marshalling submissionId: ", err.Error())
-			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
-		}
-
-		subBytes, err := json.Marshal(submission)
-		if err != nil {
-			log.Errorln("Could not marshal submission: ", err.Error())
-			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
-		}
-		log.Debugln("Sending submission with ID: ", submissionId.String())
-
-		submissionBytes := append(submissionIdBytes, subBytes...)
-
-		err = s.writeToStream(submissionBytes)
-		if err != nil {
-			log.Errorln("Failed to write to stream: ", err.Error())
-			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
-		}
-		log.Debugln("Stream write successful for ID: ", submissionId.String(), "for Epoch:", submission.Request.EpochId, "Slot:", submission.Request.SlotId)
-
 	}
 }
 
@@ -147,7 +146,7 @@ func (s *server) writeToStream(data []byte) error {
 	defer mu.Unlock()
 
 	if s.stream == nil || s.stream.Conn().IsClosed() {
-		if err := TryConnection(s); err != nil {
+		if err := s.TryConnection(); err != nil {
 			return fmt.Errorf("connection error: %w", err)
 		}
 	}
@@ -157,6 +156,7 @@ func (s *server) writeToStream(data []byte) error {
 		if err != nil {
 			log.Errorln("Sequencer stream error, retrying: ", err.Error())
 			s.stream.Close()
+			s.stream = nil // Reset the stream so TryConnection will be called on next attempt
 			return err
 		}
 		return nil
@@ -164,6 +164,16 @@ func (s *server) writeToStream(data []byte) error {
 }
 
 func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotSimulationServer) error {
+	mu.Lock()
+	if s.stream == nil || s.stream.Conn().IsClosed() {
+		if err := s.TryConnection(); err != nil {
+			log.Errorln("Unexpected connection error: ", err.Error())
+			mu.Unlock()
+			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure: Unable to connect to sequencer"})
+		}
+	}
+	mu.Unlock()
+
 	for {
 		select {
 		case <-stream.Context().Done():
