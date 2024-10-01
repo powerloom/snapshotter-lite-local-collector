@@ -11,8 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"google.golang.org/grpc/codes"
-    "google.golang.org/grpc/status"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -21,6 +20,8 @@ import (
 	"github.com/sethvargo/go-retry"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // server is used to implement submission.SubmissionService.
@@ -83,8 +84,8 @@ func (s *server) TryConnection() error {
 	return backoff.Retry(operation, bo)
 }
 
-
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
+	log.Debugln("SubmitSnapshot called")
 	mu.Lock()
 	if s.stream == nil || s.stream.Conn().IsClosed() {
 		if err := s.TryConnection(); err != nil {

@@ -3,9 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
-	circuitv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	"proto-snapshot-server/config"
 	"time"
+
+	circuitv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -110,7 +111,7 @@ func ConfigureRelayer() {
 	// }
 	// ConnectToSequencer(peerId)
 
-	ConnectToSequencer()
+	// ConnectToSequencer()
 }
 
 func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
@@ -150,7 +151,6 @@ func ConnectToSequencer() {
 	var sequencerAddr ma.Multiaddr
 	var err error
 
-	
 	sequencer, err := fetchSequencer("https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/sequencers.json", config.SettingsObj.DataMarketAddress)
 	if err != nil {
 		log.Debugln(err.Error())
@@ -160,7 +160,7 @@ func ConnectToSequencer() {
 		log.Debugln(err.Error())
 		return
 	}
-	
+
 	sequencerInfo, err := peer.AddrInfoFromP2pAddr(sequencerAddr)
 
 	if err != nil {
