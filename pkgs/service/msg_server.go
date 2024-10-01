@@ -83,31 +83,6 @@ func (s *server) TryConnection() error {
 	return backoff.Retry(operation, bo)
 }
 
-func (s *server) processSubmission(submission *pkgs.SubmissionRequest) error {
-    submissionId := uuid.New()
-    submissionIdBytes, err := submissionId.MarshalText()
-    if err != nil {
-        return fmt.Errorf("error marshalling submissionId: %w", err)
-    }
-
-    subBytes, err := json.Marshal(submission)
-    if err != nil {
-        return fmt.Errorf("could not marshal submission: %w", err)
-    }
-
-    log.Debugln("Sending submission with ID: ", submissionId.String())
-
-    submissionBytes := append(submissionIdBytes, subBytes...)
-
-    err = s.writeToStream(submissionBytes)
-    if err != nil {
-        return fmt.Errorf("failed to write to stream: %w", err)
-    }
-
-    log.Debugln("Stream write successful for ID: ", submissionId.String(), "for Epoch:", submission.Request.EpochId, "Slot:", submission.Request.SlotId)
-    return nil
-}
-
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
 	mu.Lock()
