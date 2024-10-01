@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,10 +11,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"github.com/libp2p/go-libp2p/core/peer"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/sethvargo/go-retry"
 	log "github.com/sirupsen/logrus"
@@ -169,7 +169,7 @@ func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotS
 		if err := s.TryConnection(); err != nil {
 			log.Errorln("Unexpected connection error: ", err.Error())
 			mu.Unlock()
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure: Unable to connect to sequencer"})
+			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure: Unable to connect to sequencer"})
 		}
 	}
 	mu.Unlock()
@@ -200,7 +200,7 @@ func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotS
 			submissionIdBytes, err := submissionId.MarshalText()
 			if err != nil {
 				log.Errorln("Error marshalling submissionId: ", err.Error())
-				if err := stream.Send(&pkgs.SubmissionResponse{Message: "Failure"}); err != nil {
+				if err := stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"}); err != nil {
 					log.Errorln("Failed to send error response: ", err.Error())
 				}
 				continue
@@ -209,7 +209,7 @@ func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotS
 			subBytes, err := json.Marshal(submission)
 			if err != nil {
 				log.Errorln("Could not marshal submission: ", err.Error())
-				if err := stream.Send(&pkgs.SubmissionResponse{Message: "Failure"}); err != nil {
+				if err := stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"}); err != nil {
 					log.Errorln("Failed to send error response: ", err.Error())
 				}
 				continue
@@ -222,7 +222,7 @@ func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotS
 			err = s.writeToStream(submissionBytes)
 			if err != nil {
 				log.Errorln("Failed to write to stream: ", err.Error())
-				if err := stream.Send(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()}); err != nil {
+				if err := stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()}); err != nil {
 					log.Errorln("Failed to send error response: ", err.Error())
 				}
 				continue
@@ -230,7 +230,7 @@ func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotS
 
 			log.Debugln("Stream write successful for ID: ", submissionId.String(), "for Epoch:", submission.Request.EpochId, "Slot:", submission.Request.SlotId)
 			// Send success response for this submission
-			if err := stream.Send(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()}); err != nil {
+			if err := stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()}); err != nil {
 				log.Errorln("Failed to send success response: ", err.Error())
 				return err
 			}
