@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v5.28.2
-// source: pkgs/proto/submission.proto
+// source: submission.proto
 
 package pkgs
 
@@ -142,5 +142,5 @@ var Submission_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "pkgs/proto/submission.proto",
+	Metadata: "submission.proto",
 }
