@@ -11,7 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-
+	"google.golang.org/grpc/codes"
+    "google.golang.org/grpc/status"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -82,13 +83,39 @@ func (s *server) TryConnection() error {
 	return backoff.Retry(operation, bo)
 }
 
+func (s *server) processSubmission(submission *pkgs.SubmissionRequest) error {
+    submissionId := uuid.New()
+    submissionIdBytes, err := submissionId.MarshalText()
+    if err != nil {
+        return fmt.Errorf("error marshalling submissionId: %w", err)
+    }
+
+    subBytes, err := json.Marshal(submission)
+    if err != nil {
+        return fmt.Errorf("could not marshal submission: %w", err)
+    }
+
+    log.Debugln("Sending submission with ID: ", submissionId.String())
+
+    submissionBytes := append(submissionIdBytes, subBytes...)
+
+    err = s.writeToStream(submissionBytes)
+    if err != nil {
+        return fmt.Errorf("failed to write to stream: %w", err)
+    }
+
+    log.Debugln("Stream write successful for ID: ", submissionId.String(), "for Epoch:", submission.Request.EpochId, "Slot:", submission.Request.SlotId)
+    return nil
+}
+
+
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
 	mu.Lock()
 	if s.stream == nil || s.stream.Conn().IsClosed() {
 		if err := s.TryConnection(); err != nil {
 			log.Errorln("Unexpected connection error: ", err.Error())
 			mu.Unlock()
-			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure: Unable to connect to sequencer"})
+			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure: Unable to connect to sequencer"})
 		}
 	}
 	mu.Unlock()
@@ -97,20 +124,25 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 		select {
 		case <-stream.Context().Done():
 			log.Debugln("Stream context done")
-			return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
+			return nil
 		default:
 			submission, err := stream.Recv()
 			if err != nil {
 				if err == io.EOF {
 					log.Debugln("EOF reached")
-					return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
+					stream.Send(&pkgs.SubmissionResponse{Message: "Success"})
+					continue
 				}
 				if strings.Contains(err.Error(), "context canceled") {
 					log.Debugln("Stream ended by client")
-					return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Success"})
+					return nil
+				}
+				if status.Code(err) == codes.Canceled {
+					log.Debugln("Stream canceled by client")
+					return nil
 				}
 				log.Errorln("Unexpected stream error: ", err.Error())
-				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
+				return nil
 			}
 
 			log.Debugln("Received submission with request: ", submission.Request)
@@ -119,13 +151,13 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			submissionIdBytes, err := submissionId.MarshalText()
 			if err != nil {
 				log.Errorln("Error marshalling submissionId: ", err.Error())
-				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
+				return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
 			}
 
 			subBytes, err := json.Marshal(submission)
 			if err != nil {
 				log.Errorln("Could not marshal submission: ", err.Error())
-				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure"})
+				return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
 			}
 			log.Debugln("Sending submission with ID: ", submissionId.String())
 
@@ -134,7 +166,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			err = s.writeToStream(submissionBytes)
 			if err != nil {
 				log.Errorln("Failed to write to stream: ", err.Error())
-				return stream.SendAndClose(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
+				return stream.Send(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
 			}
 			log.Debugln("Stream write successful for ID: ", submissionId.String(), "for Epoch:", submission.Request.EpochId, "Slot:", submission.Request.SlotId)
 		}
