@@ -13,7 +13,7 @@ func main() {
 	helpers.InitLogger()
 	config.LoadConfig()
 	service.InitializeReportingService(config.SettingsObj.PowerloomReportingUrl, 5*time.Second)
-	// service.ConfigureRelayer()
+	service.ConfigureRelayer()
 	wg.Add(1)
 	go service.StartSubmissionServer(service.NewMsgServerImpl())
 	wg.Wait()
