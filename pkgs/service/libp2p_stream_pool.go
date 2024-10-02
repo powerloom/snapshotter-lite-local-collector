@@ -31,30 +31,16 @@ func newStreamPool(maxSize int, sequencerID peer.ID, createStream func() (networ
 }
 
 func (p *streamPool) GetStream() (network.Stream, error) {
-	for i := 0; i < 3; i++ { // Try up to 3 times
-		select {
-		case stream := <-p.streams:
-			if stream.Conn().IsClosed() {
-				stream.Close()
-				continue // Try again
-			}
-			return stream, nil
-		default:
+	select {
+	case stream := <-p.streams:
+		if stream.Conn().IsClosed() {
+			stream.Close()
 			return p.createNewStream()
 		}
+		return stream, nil
+	default:
+		return p.createNewStream()
 	}
-	return p.createNewStream() // Final attempt
-}
-
-func (p *streamPool) createNewStream() (network.Stream, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	stream, err := p.createStream()
-	if err != nil {
-		return nil, err
-	}
-	return stream, nil
 }
 
 func (p *streamPool) ReturnStream(stream network.Stream) {
@@ -62,9 +48,6 @@ func (p *streamPool) ReturnStream(stream network.Stream) {
 		stream.Close()
 		return
 	}
-
-	// Should we reset the stream before returning it to the pool
-	// stream.Reset()
 
 	select {
 	case p.streams <- stream:
@@ -132,4 +115,10 @@ func (p *streamPool) cleanPool() {
 	for _, stream := range validStreams {
 		p.streams <- stream
 	}
+}
+
+func (p *streamPool) createNewStream() (network.Stream, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.createStream()
 }

@@ -63,11 +63,27 @@ func NewMsgServerImpl() pkgs.SubmissionServer {
 	}
 
 	createStream := func() (network.Stream, error) {
-		return rpctorelay.NewStream(
-			network.WithUseTransient(context.Background(), "collect"),
-			sequencerID,
-			"/collect",
-		)
+		var stream network.Stream
+		var err error
+
+		operation := func() error {
+			stream, err = rpctorelay.NewStream(
+				network.WithUseTransient(context.Background(), "collect"),
+				sequencerID,
+				"/collect",
+			)
+			return err
+		}
+
+		backoffStrategy := backoff.NewExponentialBackOff()
+		backoffStrategy.MaxElapsedTime = 30 * time.Second // Adjust as needed
+
+		err = backoff.Retry(operation, backoffStrategy)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create stream after retries: %w", err)
+		}
+
+		return stream, nil
 	}
 	return &server{
 		streamPool: newStreamPool(2048, sequencerID, createStream), // Adjust pool size as needed
@@ -75,35 +91,26 @@ func NewMsgServerImpl() pkgs.SubmissionServer {
 }
 
 func (s *server) writeToStream(data []byte) error {
-	return backoff.Retry(func() error {
+	for attempt := 0; attempt < 3; attempt++ {
 		stream, err := s.streamPool.GetStream()
 		if err != nil {
-			log.Errorf("Failed to get stream: %v", err)
-			return err
-		}
-		defer s.streamPool.ReturnStream(stream)
-
-		// Set a write deadline
-		if err := stream.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
-			log.Warnf("Failed to set write deadline: %v", err)
-			return err
+			log.Warnf("Failed to get stream (attempt %d): %v", attempt+1, err)
+			time.Sleep(time.Second * time.Duration(attempt+1))
+			continue
 		}
 
 		_, err = stream.Write(data)
-
-		// Reset the write deadline
-		stream.SetWriteDeadline(time.Time{})
-
-		if err != nil {
-			if err == io.EOF || strings.Contains(err.Error(), "stream reset") || strings.Contains(err.Error(), "deadline exceeded") {
-				log.Warnf("Stream closed, reset, or timed out, will retry: %v", err)
-				return err // This error will trigger a retry
-			}
-			log.Errorf("Failed to write to stream: %v", err)
-			return backoff.Permanent(err) // Other errors won't be retried
+		if err == nil {
+			s.streamPool.ReturnStream(stream)
+			return nil // Success
 		}
-		return nil
-	}, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 3))
+
+		log.Warnf("Failed to write to stream (attempt %d): %v", attempt+1, err)
+		stream.Reset() // Reset the stream instead of returning it to the pool
+		time.Sleep(time.Second * time.Duration(attempt+1))
+	}
+
+	return fmt.Errorf("failed to write to stream after 3 attempts")
 }
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
