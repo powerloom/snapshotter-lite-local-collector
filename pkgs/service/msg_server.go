@@ -58,6 +58,12 @@ func (s *server) TryConnection() error {
 		log.Errorln("Error converting MultiAddr to AddrInfo: ", err.Error())
 	}
 
+	if err := rpctorelay.Connect(context.Background(), *sequencerInfo); err != nil {
+		log.Debugln("Failed to connect to the Sequencer:", err)
+	} else {
+		log.Debugln("Successfully connected to the Sequencer: ", sequencerAddr.String())
+	}
+
 	SequencerId = sequencerInfo.ID
 	operation := func() error {
 		// Open a new stream to the sequencer
