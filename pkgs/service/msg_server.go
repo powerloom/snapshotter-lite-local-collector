@@ -86,7 +86,7 @@ func NewMsgServerImpl() pkgs.SubmissionServer {
 		return stream, nil
 	}
 	return &server{
-		streamPool: newStreamPool(2048, sequencerID, createStream), // Adjust pool size as needed
+		streamPool: newStreamPool(20, sequencerID, createStream), // Adjust pool size as needed
 	}
 }
 
@@ -155,6 +155,7 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
 		}
 		log.Debugln("Stream write successful for ID: ", submissionId.String(), "for Epoch:", submission.Request.EpochId, "Slot:", submission.Request.SlotId)
+		return stream.Send(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()})
 	}
 }
 
