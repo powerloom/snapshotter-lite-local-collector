@@ -86,7 +86,7 @@ func NewMsgServerImpl() pkgs.SubmissionServer {
 		return stream, nil
 	}
 	return &server{
-		streamPool: newStreamPool(20, sequencerID, createStream), // Adjust pool size as needed
+		streamPool: newStreamPool(1024, sequencerID, createStream), // Adjust pool size as needed
 	}
 }
 
