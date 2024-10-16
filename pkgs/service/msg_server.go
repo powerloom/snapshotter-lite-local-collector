@@ -155,6 +155,11 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
 		}
 		log.Debugln("Stream write successful for ID: ", submissionId.String(), "for Epoch:", submission.Request.EpochId, "Slot:", submission.Request.SlotId)
+		if submission.Request.EpochId == 0 {
+			log.Debugln("✅ Simulation snapshot submitted successfully to sequencer:", submissionId.String())
+		} else {
+			log.Debugln("✅ Snapshot submitted successfully to sequencer: ", submissionId.String())
+		}
 		return stream.Send(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()})
 	}
 }
