@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"proto-snapshot-server/config"
 	"sync"
 	"time"
 
@@ -63,7 +64,7 @@ func (p *streamPool) Stop() {
 }
 
 func (p *streamPool) maintainPool(ctx context.Context) {
-	ticker := time.NewTicker(900 * time.Second)
+	ticker := time.NewTicker(time.Duration(config.SettingsObj.StreamPoolHealthCheckInterval) * time.Second)
 	defer ticker.Stop()
 
 	for {
