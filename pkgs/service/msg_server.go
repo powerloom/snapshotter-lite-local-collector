@@ -101,57 +101,39 @@ func NewMsgServerImpl() pkgs.SubmissionServer {
 	return s
 }
 
-func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
+func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSubmission) (*pkgs.SubmissionResponse, error) {
 	log.Debugln("SubmitSnapshot called")
 
-	for {
-		submission, err := stream.Recv()
-		if err != nil {
-			switch {
-			case err == io.EOF:
-				log.Debugln("EOF reached")
-			case strings.Contains(err.Error(), "context canceled"):
-				log.Errorln("Stream ended by client: ")
-			default:
-				log.Errorln("Unexpected stream error: ", err.Error())
-				return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
-			}
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Success"})
-		}
+	submissionId := uuid.New()
+	submissionIdBytes, err := submissionId.MarshalText()
+	if err != nil {
+		log.Errorln("Error marshalling submissionId: ", err.Error())
+		return &pkgs.SubmissionResponse{Message: "Failure"}, err
+	}
 
-		log.Debugln("Received submission with request: ", submission.Request)
+	dataMarketAddressBytes := []byte(config.SettingsObj.DataMarketAddress)
 
-		submissionId := uuid.New()
-		submissionIdBytes, err := submissionId.MarshalText()
-		if err != nil {
-			log.Errorln("Error marshalling submissionId: ", err.Error())
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
-		}
+	subBytes, err := json.Marshal(submission)
+	if err != nil {
+		log.Errorln("Could not marshal submission: ", err.Error())
+		return &pkgs.SubmissionResponse{Message: "Failure"}, err
+	}
 
-		dataMarketAddressBytes := []byte(config.SettingsObj.DataMarketAddress)
+	submissionBytes := append(submissionIdBytes, dataMarketAddressBytes...)
+	submissionBytes = append(submissionBytes, subBytes...)
 
-		subBytes, err := json.Marshal(submission)
-		if err != nil {
-			log.Errorln("Could not marshal submission: ", err.Error())
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
-		}
+	job := &submissionJob{
+		id:   submissionId,
+		data: submissionBytes,
+	}
 
-		submissionBytes := append(submissionIdBytes, dataMarketAddressBytes...)
-		submissionBytes = append(submissionBytes, subBytes...)
-
-		job := &submissionJob{
-			id:   submissionId,
-			data: submissionBytes,
-		}
-
-		select {
-		case s.submissionQueue <- job:
-			log.Debugf("Queued submission with ID: %s", submissionId)
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()})
-		default:
-			log.Warnf("Submission queue full, dropping submission: %s", submissionId)
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure: Queue full"})
-		}
+	select {
+	case s.submissionQueue <- job:
+		log.Debugf("Queued submission with ID: %s", submissionId)
+		return &pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()}, nil
+	default:
+		log.Warnf("Submission queue full, dropping submission: %s", submissionId)
+		return &pkgs.SubmissionResponse{Message: "Failure: Queue full"}, fmt.Errorf("queue full")
 	}
 }
 
