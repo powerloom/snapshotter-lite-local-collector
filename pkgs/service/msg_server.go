@@ -4,42 +4,49 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"proto-snapshot-server/config"
 	"proto-snapshot-server/pkgs"
-	"strings"
 	"sync"
 	"time"
+
+	"strconv"
+	"sync/atomic"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
+	"github.com/rcrowley/go-metrics"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 )
 
 // server is used to implement submission.SubmissionService.
 type server struct {
 	pkgs.UnimplementedSubmissionServer
-	streamPool      *streamPool
-	submissionQueue chan *submissionJob
-	processInterval time.Duration
+	streamPool       *streamPool
+	limiter          *rate.Limiter
+	metrics          serverMetrics
+	epochSubmissions sync.Map // Map[string]int64
+	duplicateCount   int64
 }
 
 var _ pkgs.SubmissionServer = &server{}
 var mu sync.Mutex
 
-type submissionJob struct {
-	id   uuid.UUID
-	data []byte
+type serverMetrics struct {
+	successfulSubmissions metrics.Counter
+	failedSubmissions     metrics.Counter
+	queueSize             metrics.Gauge
+	processingTime        metrics.Timer
 }
 
 // NewMsgServerImpl returns an implementation of the SubmissionService interface
 // for the provided Keeper.
-func NewMsgServerImpl() pkgs.SubmissionServer {
+func NewMsgServerImplV2() pkgs.SubmissionServer {
 	var sequencerAddr ma.Multiaddr
 	var err error
 
@@ -92,17 +99,27 @@ func NewMsgServerImpl() pkgs.SubmissionServer {
 
 		return stream, nil
 	}
+
 	s := &server{
-		streamPool:      newStreamPool(config.SettingsObj.MaxStreamPoolSize, sequencerID, createStream),
-		submissionQueue: make(chan *submissionJob, 10000), // Large buffer to handle spikes
-		processInterval: 500 * time.Millisecond,          // Adjust this value to control processing rate
+		streamPool: newStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream), // Correctly initialize the stream pool
+		limiter:    rate.NewLimiter(rate.Limit(500), 1),                               // 500 submissions per second
+		metrics: serverMetrics{
+			successfulSubmissions: metrics.NewCounter(),
+			failedSubmissions:     metrics.NewCounter(),
+			queueSize:             metrics.NewGauge(),
+			processingTime:        metrics.NewTimer(),
+		},
+		epochSubmissions: sync.Map{}, // Map[string]int64
+		duplicateCount:   0,
 	}
-	go s.submissionProcessor()
+	go s.monitorResources()
 	return s
 }
 
 func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSubmission) (*pkgs.SubmissionResponse, error) {
-	log.Debugln("SubmitSnapshot called")
+	if err := s.limiter.Wait(ctx); err != nil {
+		return nil, err
+	}
 
 	submissionId := uuid.New()
 	submissionIdBytes, err := submissionId.MarshalText()
@@ -111,30 +128,40 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 		return &pkgs.SubmissionResponse{Message: "Failure"}, err
 	}
 
-	dataMarketAddressBytes := []byte(config.SettingsObj.DataMarketAddress)
-
 	subBytes, err := json.Marshal(submission)
 	if err != nil {
 		log.Errorln("Could not marshal submission: ", err.Error())
 		return &pkgs.SubmissionResponse{Message: "Failure"}, err
 	}
 
-	submissionBytes := append(submissionIdBytes, dataMarketAddressBytes...)
-	submissionBytes = append(submissionBytes, subBytes...)
+	submissionBytes := append(submissionIdBytes, subBytes...)
 
-	job := &submissionJob{
-		id:   submissionId,
-		data: submissionBytes,
-	}
+	epochID := submission.Request.EpochId
+	projectID := submission.Request.ProjectId
+	key := fmt.Sprintf("%d:%s", epochID, projectID)
 
-	select {
-	case s.submissionQueue <- job:
-		log.Debugf("Queued submission with ID: %s", submissionId)
-		return &pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()}, nil
-	default:
-		log.Warnf("Submission queue full, dropping submission: %s", submissionId)
-		return &pkgs.SubmissionResponse{Message: "Failure: Queue full"}, fmt.Errorf("queue full")
+	count, _ := s.epochSubmissions.LoadOrStore(key, int64(0))
+	if count.(int64) > 0 {
+		atomic.AddInt64(&s.duplicateCount, 1)
+		log.Warnf("Duplicate submission for epoch %d and project %s", epochID, projectID)
 	}
+	s.epochSubmissions.Store(key, count.(int64)+1)
+
+	go func() {
+		start := time.Now()
+		err := s.writeToStream(submissionBytes)
+		s.metrics.processingTime.UpdateSince(start)
+
+		if err != nil {
+			s.metrics.failedSubmissions.Inc(1)
+			log.Errorf("❌ Failed to process submission: %v", err)
+		} else {
+			s.metrics.successfulSubmissions.Inc(1)
+			log.Infof("✅ Successfully processed submission with ID: %s", submissionId)
+		}
+	}()
+
+	return &pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()}, nil
 }
 
 func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotSimulationServer) error {
@@ -146,49 +173,17 @@ func (s *server) mustEmbedUnimplementedSubmissionServer() {
 
 func StartSubmissionServer(server pkgs.SubmissionServer) {
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", config.SettingsObj.PortNumber))
-
 	if err != nil {
-		log.Debugf("failed to listen: %v", err)
+		log.Fatalf("failed to listen: %v", err)
 	}
 
 	s := grpc.NewServer()
 	pkgs.RegisterSubmissionServer(s, server)
-	log.Debugln("Server listening at", lis.Addr())
+	log.Printf("Server listening at %v", lis.Addr())
 
 	if err := s.Serve(lis); err != nil {
-		log.Debugf("failed to serve: %v", err)
+		log.Fatalf("failed to serve: %v", err)
 	}
-}
-
-func (s *server) submissionProcessor() {
-	ticker := time.NewTicker(s.processInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			select {
-			case job := <-s.submissionQueue:
-				s.processSubmission(job)
-			default:
-				// No job available, continue to next tick
-			}
-		}
-	}
-}
-
-func (s *server) processSubmission(job *submissionJob) {
-	maxRetries := 3
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		err := s.writeToStream(job.data)
-		if err == nil {
-			log.Infof("✅ Successfully processed submission with ID: %s", job.id)
-			return
-		}
-		log.Warnf("❌ Failed to process submission %s (attempt %d): %v", job.id, attempt+1, err)
-		time.Sleep(time.Duration(attempt+1) * time.Second) // Simple backoff
-	}
-	log.Errorf("❌ Failed to process submission %s after %d attempts", job.id, maxRetries)
 }
 
 func (s *server) writeToStream(data []byte) error {
@@ -205,4 +200,45 @@ func (s *server) writeToStream(data []byte) error {
 	}
 
 	return nil
+}
+
+func (s *server) monitorResources() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.cleanupOldEpochs()
+
+		var totalSubmissions int64
+		var uniqueEpochs int
+		s.epochSubmissions.Range(func(key, value interface{}) bool {
+			uniqueEpochs++
+			totalSubmissions += value.(int64)
+			return true
+		})
+
+		log.Infof("Successful submissions: %d", s.metrics.successfulSubmissions.Count())
+		log.Infof("Failed submissions: %d", s.metrics.failedSubmissions.Count())
+		log.Infof("Average processing time: %.2fs", s.metrics.processingTime.Mean())
+		log.Infof("Total submissions in last hour: %d", totalSubmissions)
+		log.Infof("Unique epochs in last hour: %d", uniqueEpochs)
+		log.Infof("Duplicate submissions: %d", atomic.LoadInt64(&s.duplicateCount))
+	}
+}
+
+func (s *server) cleanupOldEpochs() {
+	currentEpoch := time.Now().Unix() / 120 // Assuming 2-minute epochs
+	s.epochSubmissions.Range(func(key, value interface{}) bool {
+		epochID := key.(string)
+		epoch, _ := strconv.ParseInt(epochID, 10, 64)
+		if currentEpoch-epoch > 30 { // Keep data for the last hour (30 epochs)
+			s.epochSubmissions.Delete(epochID)
+		}
+		return true
+	})
+}
+
+func (s *server) Start() {
+	// If you want to keep any startup logic here, you can
+	// Otherwise, you can remove this method if it's not needed
 }

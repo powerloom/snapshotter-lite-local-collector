@@ -15,6 +15,6 @@ func main() {
 	service.InitializeReportingService(config.SettingsObj.PowerloomReportingUrl, 5*time.Second)
 	service.ConfigureRelayer()
 	wg.Add(1)
-	go service.StartSubmissionServer(service.NewMsgServerImpl())
+	go service.StartSubmissionServer(service.NewMsgServerImplV2())
 	wg.Wait()
 }
