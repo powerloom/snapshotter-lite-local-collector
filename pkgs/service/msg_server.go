@@ -24,11 +24,18 @@ import (
 // server is used to implement submission.SubmissionService.
 type server struct {
 	pkgs.UnimplementedSubmissionServer
-	streamPool *streamPool
+	streamPool      *streamPool
+	submissionQueue chan *submissionJob
+	processInterval time.Duration
 }
 
 var _ pkgs.SubmissionServer = &server{}
 var mu sync.Mutex
+
+type submissionJob struct {
+	id   uuid.UUID
+	data []byte
+}
 
 // NewMsgServerImpl returns an implementation of the SubmissionService interface
 // for the provided Keeper.
@@ -85,32 +92,13 @@ func NewMsgServerImpl() pkgs.SubmissionServer {
 
 		return stream, nil
 	}
-	return &server{
-		streamPool: newStreamPool(config.SettingsObj.MaxStreamPoolSize, sequencerID, createStream),
+	s := &server{
+		streamPool:      newStreamPool(config.SettingsObj.MaxStreamPoolSize, sequencerID, createStream),
+		submissionQueue: make(chan *submissionJob, 10000), // Large buffer to handle spikes
+		processInterval: 500 * time.Millisecond,          // Adjust this value to control processing rate
 	}
-}
-
-func (s *server) writeToStream(data []byte) error {
-	for attempt := 0; attempt < 3; attempt++ {
-		stream, err := s.streamPool.GetStream()
-		if err != nil {
-			log.Warnf("Failed to get stream (attempt %d): %v", attempt+1, err)
-			time.Sleep(time.Second * time.Duration(attempt+1))
-			continue
-		}
-
-		_, err = stream.Write(data)
-		if err == nil {
-			s.streamPool.ReturnStream(stream)
-			return nil // Success
-		}
-
-		log.Warnf("Failed to write to stream (attempt %d): %v", attempt+1, err)
-		stream.Reset() // Reset the stream instead of returning it to the pool
-		time.Sleep(time.Second * time.Duration(attempt+1))
-	}
-
-	return fmt.Errorf("failed to write to stream after 3 attempts")
+	go s.submissionProcessor()
+	return s
 }
 
 func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
@@ -140,27 +128,30 @@ func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) err
 			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
 		}
 
+		dataMarketAddressBytes := []byte(config.SettingsObj.DataMarketAddress)
+
 		subBytes, err := json.Marshal(submission)
 		if err != nil {
 			log.Errorln("Could not marshal submission: ", err.Error())
 			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
 		}
-		log.Debugln("Sending submission with ID: ", submissionId.String())
 
-		submissionBytes := append(submissionIdBytes, subBytes...)
+		submissionBytes := append(submissionIdBytes, dataMarketAddressBytes...)
+		submissionBytes = append(submissionBytes, subBytes...)
 
-		err = s.writeToStream(submissionBytes)
-		if err != nil {
-			log.Errorln("Failed to write to stream: ", err.Error())
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
+		job := &submissionJob{
+			id:   submissionId,
+			data: submissionBytes,
 		}
-		log.Debugln("Stream write successful for ID: ", submissionId.String(), "for Epoch:", submission.Request.EpochId, "Slot:", submission.Request.SlotId)
-		if submission.Request.EpochId == 0 {
-			log.Debugln("✅ Simulation snapshot submitted successfully to sequencer:", submissionId.String())
-		} else {
-			log.Debugln("✅ Snapshot submitted successfully to sequencer: ", submissionId.String())
+
+		select {
+		case s.submissionQueue <- job:
+			log.Debugf("Queued submission with ID: %s", submissionId)
+			return stream.Send(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()})
+		default:
+			log.Warnf("Submission queue full, dropping submission: %s", submissionId)
+			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure: Queue full"})
 		}
-		return stream.Send(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()})
 	}
 }
 
@@ -185,4 +176,51 @@ func StartSubmissionServer(server pkgs.SubmissionServer) {
 	if err := s.Serve(lis); err != nil {
 		log.Debugf("failed to serve: %v", err)
 	}
+}
+
+func (s *server) submissionProcessor() {
+	ticker := time.NewTicker(s.processInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			select {
+			case job := <-s.submissionQueue:
+				s.processSubmission(job)
+			default:
+				// No job available, continue to next tick
+			}
+		}
+	}
+}
+
+func (s *server) processSubmission(job *submissionJob) {
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err := s.writeToStream(job.data)
+		if err == nil {
+			log.Infof("✅ Successfully processed submission with ID: %s", job.id)
+			return
+		}
+		log.Warnf("❌ Failed to process submission %s (attempt %d): %v", job.id, attempt+1, err)
+		time.Sleep(time.Duration(attempt+1) * time.Second) // Simple backoff
+	}
+	log.Errorf("❌ Failed to process submission %s after %d attempts", job.id, maxRetries)
+}
+
+func (s *server) writeToStream(data []byte) error {
+	stream, err := s.streamPool.GetStream()
+	if err != nil {
+		return fmt.Errorf("failed to get stream: %w", err)
+	}
+	defer s.streamPool.ReturnStream(stream)
+
+	_, err = stream.Write(data)
+	if err != nil {
+		stream.Reset()
+		return fmt.Errorf("failed to write to stream: %w", err)
+	}
+
+	return nil
 }
