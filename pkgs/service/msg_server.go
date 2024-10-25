@@ -10,9 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"strconv"
-	"sync/atomic"
-
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -27,10 +24,8 @@ import (
 // server is used to implement submission.SubmissionService.
 type server struct {
 	pkgs.UnimplementedSubmissionServer
-	streamPool       *streamPool
-	limiter          *rate.Limiter
-	epochSubmissions sync.Map // Map[string]int64
-	duplicateCount   int64
+	streamPool *streamPool
+	limiter    *rate.Limiter
 }
 
 var _ pkgs.SubmissionServer = &server{}
@@ -100,12 +95,9 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 	}
 
 	s := &server{
-		streamPool:       newStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream),
-		limiter:          rate.NewLimiter(rate.Limit(500), 1), // 500 submissions per second
-		epochSubmissions: sync.Map{},
-		duplicateCount:   0,
+		streamPool: newStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream),
+		limiter:    rate.NewLimiter(rate.Limit(500), 1), // 500 submissions per second
 	}
-	go s.monitorResources()
 	return s
 }
 
@@ -128,17 +120,6 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	}
 
 	submissionBytes := append(submissionIdBytes, subBytes...)
-
-	epochID := submission.Request.EpochId
-	projectID := submission.Request.ProjectId
-	key := fmt.Sprintf("%d:%s", epochID, projectID)
-
-	count, _ := s.epochSubmissions.LoadOrStore(key, int64(0))
-	if count.(int64) > 0 {
-		atomic.AddInt64(&s.duplicateCount, 1)
-		log.Warnf("Duplicate submission for epoch %d and project %s", epochID, projectID)
-	}
-	s.epochSubmissions.Store(key, count.(int64)+1)
 
 	go func() {
 		err := s.writeToStream(submissionBytes)
@@ -189,42 +170,4 @@ func (s *server) writeToStream(data []byte) error {
 	}
 
 	return nil
-}
-
-func (s *server) monitorResources() {
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		s.cleanupOldEpochs()
-
-		var totalSubmissions int64
-		var uniqueEpochs int
-		s.epochSubmissions.Range(func(key, value interface{}) bool {
-			uniqueEpochs++
-			totalSubmissions += value.(int64)
-			return true
-		})
-
-		log.Infof("Total submissions in last hour: %d", totalSubmissions)
-		log.Infof("Unique epochs in last hour: %d", uniqueEpochs)
-		log.Infof("Duplicate submissions: %d", atomic.LoadInt64(&s.duplicateCount))
-	}
-}
-
-func (s *server) cleanupOldEpochs() {
-	currentEpoch := time.Now().Unix() / 120 // Assuming 2-minute epochs
-	s.epochSubmissions.Range(func(key, value interface{}) bool {
-		epochID := key.(string)
-		epoch, _ := strconv.ParseInt(epochID, 10, 64)
-		if currentEpoch-epoch > 30 { // Keep data for the last hour (30 epochs)
-			s.epochSubmissions.Delete(epochID)
-		}
-		return true
-	})
-}
-
-func (s *server) Start() {
-	// If you want to keep any startup logic here, you can
-	// Otherwise, you can remove this method if it's not needed
 }
