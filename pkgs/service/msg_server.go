@@ -29,7 +29,6 @@ type server struct {
 	pkgs.UnimplementedSubmissionServer
 	streamPool       *streamPool
 	limiter          *rate.Limiter
-	metrics          serverMetrics
 	epochSubmissions sync.Map // Map[string]int64
 	duplicateCount   int64
 }
@@ -101,15 +100,9 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 	}
 
 	s := &server{
-		streamPool: newStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream), // Correctly initialize the stream pool
-		limiter:    rate.NewLimiter(rate.Limit(500), 1),                               // 500 submissions per second
-		metrics: serverMetrics{
-			successfulSubmissions: metrics.NewCounter(),
-			failedSubmissions:     metrics.NewCounter(),
-			queueSize:             metrics.NewGauge(),
-			processingTime:        metrics.NewTimer(),
-		},
-		epochSubmissions: sync.Map{}, // Map[string]int64
+		streamPool:       newStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream),
+		limiter:          rate.NewLimiter(rate.Limit(500), 1), // 500 submissions per second
+		epochSubmissions: sync.Map{},
 		duplicateCount:   0,
 	}
 	go s.monitorResources()
@@ -148,15 +141,11 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	s.epochSubmissions.Store(key, count.(int64)+1)
 
 	go func() {
-		start := time.Now()
 		err := s.writeToStream(submissionBytes)
-		s.metrics.processingTime.UpdateSince(start)
 
 		if err != nil {
-			s.metrics.failedSubmissions.Inc(1)
 			log.Errorf("❌ Failed to process submission: %v", err)
 		} else {
-			s.metrics.successfulSubmissions.Inc(1)
 			log.Infof("✅ Successfully processed submission with ID: %s", submissionId)
 		}
 	}()
@@ -217,9 +206,6 @@ func (s *server) monitorResources() {
 			return true
 		})
 
-		log.Infof("Successful submissions: %d", s.metrics.successfulSubmissions.Count())
-		log.Infof("Failed submissions: %d", s.metrics.failedSubmissions.Count())
-		log.Infof("Average processing time: %.2fs", s.metrics.processingTime.Mean())
 		log.Infof("Total submissions in last hour: %d", totalSubmissions)
 		log.Infof("Unique epochs in last hour: %d", uniqueEpochs)
 		log.Infof("Duplicate submissions: %d", atomic.LoadInt64(&s.duplicateCount))
