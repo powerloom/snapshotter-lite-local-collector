@@ -1,22 +1,19 @@
-// this means if app restart {MAX_RESTART} times in 1 min then it stops
-// const MAX_RESTART = 10;
-// const MIN_UPTIME = 60000;
+
 const NODE_ENV = process.env.NODE_ENV || 'development';
+const ENABLE_CRON_RESTART = process.env.ENABLE_CRON_RESTART_LOCAL_COLLECTOR === 'true';
 
 module.exports = {
     apps : [
         {
-            name   : "proto-snapshot-server",
+            name   : "snapshot-local-collector",
             script : "./cmd/cmd",
             cwd : `${__dirname}/cmd`,
-            // max_restarts: MAX_RESTART,
-            // min_uptime: MIN_UPTIME,
-            // kill_timeout : 3000,
             env: {
                 NODE_ENV: NODE_ENV,
                 CONFIG_PATH:`${__dirname}`
             },
-            args: "5" //Log level set to debug, for production change to 4 (INFO) or 2(ERROR)
+            args: "5", //Log level set to debug, for production change to 4 (INFO) or 2(ERROR)
+            cron_restart: ENABLE_CRON_RESTART ? "0 * * * *" : false // Restart every hour
         }
     ]
 }
