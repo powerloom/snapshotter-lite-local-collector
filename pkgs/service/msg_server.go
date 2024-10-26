@@ -7,10 +7,7 @@ import (
 	"net"
 	"proto-snapshot-server/config"
 	"proto-snapshot-server/pkgs"
-	"sync"
-	"time"
 
-	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -29,7 +26,6 @@ type server struct {
 }
 
 var _ pkgs.SubmissionServer = &server{}
-var mu sync.Mutex
 
 type serverMetrics struct {
 	successfulSubmissions metrics.Counter
@@ -64,38 +60,26 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 
 	sequencerID := sequencerInfo.ID
 
-	if err := rpctorelay.Connect(context.Background(), *sequencerInfo); err != nil {
+	if err := RPCToRelay.Connect(context.Background(), *sequencerInfo); err != nil {
 		log.Debugln("Failed to connect to the Sequencer:", err)
 	} else {
 		log.Debugln("Successfully connected to the Sequencer: ", sequencerAddr.String())
 	}
 
 	createStream := func() (network.Stream, error) {
-		var stream network.Stream
-		var err error
-
-		operation := func() error {
-			stream, err = rpctorelay.NewStream(
-				network.WithUseTransient(context.Background(), "collect"),
-				sequencerID,
-				"/collect",
-			)
-			return err
-		}
-
-		backoffStrategy := backoff.NewExponentialBackOff()
-		backoffStrategy.MaxElapsedTime = 30 * time.Second // Adjust as needed
-
-		err = backoff.Retry(operation, backoffStrategy)
+		stream, err := RPCToRelay.NewStream(
+			network.WithUseTransient(context.Background(), "collect"),
+			sequencerID,
+			"/collect",
+		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create stream after retries: %w", err)
+			return nil, fmt.Errorf("failed to create stream: %w", err)
 		}
-
 		return stream, nil
 	}
 
 	s := &server{
-		streamPool: newStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream),
+		streamPool: newStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream, sequencerID),
 		limiter:    rate.NewLimiter(rate.Limit(500), 1), // 500 submissions per second
 	}
 	return s

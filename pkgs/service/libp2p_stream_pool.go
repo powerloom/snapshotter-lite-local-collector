@@ -9,6 +9,7 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -16,24 +17,30 @@ type streamPool struct {
 	streams      chan network.Stream
 	maxSize      int
 	createStream func() (network.Stream, error)
-	mu           sync.Mutex
 	stopChan     chan struct{}
 	healthCheck  time.Duration
+	sequencerID  peer.ID
+	mu           sync.Mutex
 }
 
-func newStreamPool(maxSize int, createStream func() (network.Stream, error)) *streamPool {
+func newStreamPool(maxSize int, createStream func() (network.Stream, error), sequencerID peer.ID) *streamPool {
 	pool := &streamPool{
 		streams:      make(chan network.Stream, maxSize),
 		maxSize:      maxSize,
 		createStream: createStream,
 		stopChan:     make(chan struct{}),
 		healthCheck:  time.Duration(config.SettingsObj.StreamPoolHealthCheckInterval) * time.Second,
+		sequencerID:  sequencerID,
+		mu:           sync.Mutex{}, // This line is optional, as Go will initialize it to its zero value automatically
 	}
 	go pool.maintainPool(context.Background())
 	return pool
 }
 
 func (p *streamPool) GetStream() (network.Stream, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	for {
 		select {
 		case stream := <-p.streams:
@@ -50,6 +57,9 @@ func (p *streamPool) GetStream() (network.Stream, error) {
 }
 
 func (p *streamPool) ReturnStream(stream network.Stream) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if err := p.pingStream(stream); err != nil {
 		stream.Close()
 		return
@@ -65,13 +75,11 @@ func (p *streamPool) ReturnStream(stream network.Stream) {
 }
 
 func (p *streamPool) pingStream(stream network.Stream) error {
-	// Set a short deadline for the ping
 	if err := stream.SetDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
 		return err
 	}
-	defer stream.SetDeadline(time.Time{}) // Reset the deadline
+	defer stream.SetDeadline(time.Time{})
 
-	// Send a small ping message
 	_, err := stream.Write([]byte("ping"))
 	return err
 }
@@ -81,7 +89,7 @@ func (p *streamPool) createNewStreamWithRetry() (network.Stream, error) {
 	var err error
 
 	operation := func() error {
-		stream, err = p.createNewStream()
+		stream, err = p.createStream()
 		if err != nil {
 			log.Warnf("Failed to create stream: %v. Retrying...", err)
 			return err
@@ -100,16 +108,15 @@ func (p *streamPool) createNewStreamWithRetry() (network.Stream, error) {
 	return stream, nil
 }
 
-func (p *streamPool) createNewStream() (network.Stream, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	stream, err := p.createStream()
-	if err != nil {
-		log.Errorf("Failed to create new stream: %v", err)
-		return nil, err
+func (p *streamPool) checkSequencerConnection() {
+	if RPCToRelay.Network().Connectedness(p.sequencerID) != network.Connected {
+		log.Warn("Lost connection to sequencer. Attempting to reconnect...")
+		if err := ConnectToSequencer(); err != nil {
+			log.Errorf("Failed to reconnect to sequencer: %v", err)
+		} else {
+			log.Info("Successfully reconnected to sequencer")
+		}
 	}
-	log.Infof("Created new stream successfully")
-	return stream, nil
 }
 
 func (p *streamPool) maintainPool(ctx context.Context) {
@@ -124,6 +131,7 @@ func (p *streamPool) maintainPool(ctx context.Context) {
 			return
 		case <-ticker.C:
 			log.Info("Starting pool maintenance")
+			p.checkSequencerConnection()
 			p.fillPool()
 			p.cleanPool()
 			log.Infof("Pool maintenance complete. Current pool size: %d", len(p.streams))
@@ -132,9 +140,12 @@ func (p *streamPool) maintainPool(ctx context.Context) {
 }
 
 func (p *streamPool) fillPool() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	currentSize := len(p.streams)
 	for i := currentSize; i < p.maxSize; i++ {
-		stream, err := p.createNewStream()
+		stream, err := p.createNewStreamWithRetry()
 		if err != nil {
 			log.Errorf("Failed to create stream: %v", err)
 			break
@@ -144,6 +155,9 @@ func (p *streamPool) fillPool() {
 }
 
 func (p *streamPool) cleanPool() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	healthyStreams := make([]network.Stream, 0, len(p.streams))
 	for len(p.streams) > 0 {
 		select {
@@ -164,6 +178,9 @@ func (p *streamPool) cleanPool() {
 }
 
 func (p *streamPool) Stop() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	close(p.stopChan)
 	for len(p.streams) > 0 {
 		stream := <-p.streams
