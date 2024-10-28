@@ -20,8 +20,7 @@ type Settings struct {
 	PortNumber             string `json:"LocalCollectorPort"`
 	TrustedRelayersListUrl string `json:"TrustedRelayersListUrl"`
 	DataMarketAddress      string `json:"DataMarketAddress"`
-	MaxStreamPoolSize             int `json:"MaxStreamPoolSize"`
-	StreamPoolHealthCheckInterval int `json:"StreamPoolHealthCheckInterval"`
+	MaxStreamPoolSize      int    `json:"MaxStreamPoolSize"`
 }
 
 func LoadConfig() {
@@ -50,9 +49,6 @@ func LoadConfig() {
 	// Set default values for new fields if not specified in the config file
 	if config.MaxStreamPoolSize == 0 {
 		config.MaxStreamPoolSize = 2 // Default to 2 as per your current setup
-	}
-	if config.StreamPoolHealthCheckInterval == 0 {
-		config.StreamPoolHealthCheckInterval = 30 // Default to 30 seconds
 	}
 
 	SettingsObj = &config
