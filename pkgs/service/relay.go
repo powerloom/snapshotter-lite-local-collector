@@ -23,7 +23,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var RPCToRelay host.Host
+var SequencerHostConn host.Host
 var SequencerId peer.ID
 var routingDiscovery *routing.RoutingDiscovery
 
@@ -44,7 +44,7 @@ func ConfigureRelayer() {
 	connManager, _ := connmgr.NewConnManager(
 		40960,
 		81920,
-		connmgr.WithGracePeriod(5*time.Minute))
+		connmgr.WithGracePeriod(1*time.Minute))
 
 	scalingLimits := rcmgr.DefaultLimits
 
@@ -54,12 +54,12 @@ func ConfigureRelayer() {
 
 	cfg := rcmgr.PartialLimitConfig{
 		System: rcmgr.ResourceLimits{
-			Streams:         rcmgr.Unlimited,
 			StreamsOutbound: rcmgr.Unlimited,
 			StreamsInbound:  rcmgr.Unlimited,
+			Streams:         rcmgr.Unlimited,
 			Conns:           rcmgr.Unlimited,
-			ConnsInbound:    rcmgr.Unlimited,
 			ConnsOutbound:   rcmgr.Unlimited,
+			ConnsInbound:    rcmgr.Unlimited,
 			FD:              rcmgr.Unlimited,
 			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
 		},
@@ -71,7 +71,12 @@ func ConfigureRelayer() {
 
 	rm, err := rcmgr.NewResourceManager(limiter, rcmgr.WithMetricsDisabled())
 
-	RPCToRelay, err = libp2p.New(
+	if err != nil {
+		log.Debugln("Error instantiating resource manager: ", err.Error())
+		return
+	}
+
+	SequencerHostConn, err = libp2p.New(
 		libp2p.EnableRelay(),
 		libp2p.ConnectionManager(connManager),
 		libp2p.ListenAddrs(tcpAddr),
@@ -90,21 +95,21 @@ func ConfigureRelayer() {
 		return
 	}
 
-	log.Debugln("id: ", RPCToRelay.ID().String())
-	RPCToRelay.Network().Notify(&network.NotifyBundle{
+	log.Debugln("id: ", SequencerHostConn.ID().String())
+	SequencerHostConn.Network().Notify(&network.NotifyBundle{
 		ConnectedF:    handleConnectionEstablished,
 		DisconnectedF: handleConnectionClosed,
 	})
 
 	// Set up a Kademlia DHT for the service host
 
-	kademliaDHT := ConfigureDHT(context.Background(), RPCToRelay)
+	kademliaDHT := ConfigureDHT(context.Background(), SequencerHostConn)
 
 	routingDiscovery = routing.NewRoutingDiscovery(kademliaDHT)
 
 	util.Advertise(context.Background(), routingDiscovery, config.SettingsObj.ClientRendezvousPoint)
 
-	// peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, RPCToRelay, nil)
+	// peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, SequencerHostConn, nil)
 	// if peerId == "" {
 	// 	ReportingInstance.SendFailureNotification(nil, "Unable to connect to relayer peers")
 	// 	return
@@ -139,10 +144,10 @@ func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
 }
 
 func ConnectToSequencer() error {
-	//trustedRelayers := ConnectToTrustedRelayers(context.Background(), RPCToRelay)
-	//isConnectedP2P := ConnectToSequencerP2P(trustedRelayers, RPCToRelay)
+	//trustedRelayers := ConnectToTrustedRelayers(context.Background(), SequencerHostConn)
+	//isConnectedP2P := ConnectToSequencerP2P(trustedRelayers, SequencerHostConn)
 	//if isConnectedP2P {
-	//	log.Debugln("Successfully connected to the Sequencer: ", RPCToRelay.Network().Connectedness(peer.ID(config.SettingsObj.SequencerId)), isConnectedP2P)
+	//	log.Debugln("Successfully connected to the Sequencer: ", SequencerHostConn.Network().Connectedness(peer.ID(config.SettingsObj.SequencerId)), isConnectedP2P)
 	//	return
 	//} else {
 	//	log.Debugln("Failed to connect to the Sequencer")
@@ -169,7 +174,7 @@ func ConnectToSequencer() error {
 
 	SequencerId = sequencerInfo.ID
 
-	if err := RPCToRelay.Connect(context.Background(), *sequencerInfo); err != nil {
+	if err := SequencerHostConn.Connect(context.Background(), *sequencerInfo); err != nil {
 		log.Debugln("Failed to connect to the Sequencer:", err)
 		return err
 	}

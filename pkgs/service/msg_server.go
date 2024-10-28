@@ -7,6 +7,7 @@ import (
 	"net"
 	"proto-snapshot-server/config"
 	"proto-snapshot-server/pkgs"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -60,27 +61,40 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 
 	sequencerID := sequencerInfo.ID
 
-	if err := RPCToRelay.Connect(context.Background(), *sequencerInfo); err != nil {
+	if err := SequencerHostConn.Connect(context.Background(), *sequencerInfo); err != nil {
 		log.Debugln("Failed to connect to the Sequencer:", err)
 	} else {
 		log.Debugln("Successfully connected to the Sequencer: ", sequencerAddr.String())
 	}
 
 	createStream := func() (network.Stream, error) {
-		stream, err := RPCToRelay.NewStream(
-			network.WithUseTransient(context.Background(), "collect"),
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		log.Debugf("Attempting to create new stream to sequencer: %s", sequencerID)
+		stream, err := SequencerHostConn.NewStream(
+			ctx,
 			sequencerID,
 			"/collect",
 		)
 		if err != nil {
+			log.Errorf("Failed to create stream: %v", err)
+			// Check if we're still connected to the sequencer
+			if SequencerHostConn.Network().Connectedness(sequencerID) != network.Connected {
+				log.Warn("Lost connection to sequencer. Attempting to reconnect...")
+				if err := ConnectToSequencer(); err != nil {
+					log.Errorf("Failed to reconnect to sequencer: %v", err)
+				}
+			}
 			return nil, fmt.Errorf("failed to create stream: %w", err)
 		}
+		log.Debug("Successfully created new stream")
 		return stream, nil
 	}
 
 	s := &server{
 		streamPool: newStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream, sequencerID),
-		limiter:    rate.NewLimiter(rate.Limit(500), 1), // 500 submissions per second
+		limiter:    rate.NewLimiter(rate.Limit(300), 50), // Adjusted rate limit
 	}
 	return s
 }
@@ -141,17 +155,27 @@ func StartSubmissionServer(server pkgs.SubmissionServer) {
 }
 
 func (s *server) writeToStream(data []byte) error {
-	stream, err := s.streamPool.GetStream()
-	if err != nil {
-		return fmt.Errorf("failed to get stream: %w", err)
-	}
-	defer s.streamPool.ReturnStream(stream)
+	maxRetries := 5
+	for i := 0; i < maxRetries; i++ {
+		stream, err := s.streamPool.GetStream()
+		if err != nil {
+			log.Warnf("Failed to get stream (attempt %d/%d): %v", i+1, maxRetries, err)
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
 
-	_, err = stream.Write(data)
-	if err != nil {
-		stream.Reset()
-		return fmt.Errorf("failed to write to stream: %w", err)
+		_, err = stream.Write(data)
+		if err != nil {
+			log.Warnf("Failed to write to stream (attempt %d/%d): %v", i+1, maxRetries, err)
+			stream.Reset()
+			s.streamPool.RemoveStream(stream)
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
+
+		s.streamPool.ReturnStream(stream)
+		return nil // Success
 	}
 
-	return nil
+	return fmt.Errorf("failed to write to stream after %d attempts", maxRetries)
 }
