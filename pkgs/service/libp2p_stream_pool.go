@@ -116,17 +116,6 @@ func (p *streamPool) createNewStreamWithRetry() (network.Stream, error) {
 	return stream, nil
 }
 
-func (p *streamPool) checkSequencerConnection() {
-	if SequencerHostConn.Network().Connectedness(p.sequencerID) != network.Connected {
-		log.Warn("Lost connection to sequencer. Attempting to reconnect...")
-		if err := ConnectToSequencer(); err != nil {
-			log.Errorf("Failed to reconnect to sequencer: %v", err)
-		} else {
-			log.Info("Successfully reconnected to sequencer")
-		}
-	}
-}
-
 func (p *streamPool) Stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -3,20 +3,16 @@ package service
 import (
 	"context"
 	"strings"
-
-	"github.com/libp2p/go-libp2p/core/network"
 )
 
-// IsResourceLimitExceeded attempts to create a test stream to check if we're hitting resource limits
+// IsResourceLimitExceeded attempts to create a regular stream to check if we're hitting resource limits
 func IsResourceLimitExceeded() bool {
 	ctx := context.Background()
-	_, err := SequencerHostConn.NewStream(
-		network.WithUseTransient(ctx, "health-check"),
-		SequencerId,
-		"/collect.peer",
-	)
+	stream, err := SequencerHostConn.NewStream(ctx, SequencerId, "/collect")
 	if err != nil {
 		return strings.Contains(err.Error(), "resource limit exceeded")
 	}
+	// Make sure to close the test stream
+	defer stream.Close()
 	return false
 }
