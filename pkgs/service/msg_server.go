@@ -22,7 +22,7 @@ import (
 // server is used to implement submission.SubmissionService.
 type server struct {
 	pkgs.UnimplementedSubmissionServer
-	streamPool *streamPool
+	streamPool *StreamPool
 	limiter    *rate.Limiter
 }
 
@@ -70,30 +70,14 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 	createStream := func() (network.Stream, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-
-		log.Debugf("Attempting to create new stream to sequencer: %s", sequencerID)
-		stream, err := SequencerHostConn.NewStream(
-			ctx,
-			sequencerID,
-			"/collect",
-		)
-		if err != nil {
-			log.Errorf("Failed to create stream: %v", err)
-			// Check if we're still connected to the sequencer
-			if SequencerHostConn.Network().Connectedness(sequencerID) != network.Connected {
-				log.Warn("Lost connection to sequencer. Attempting to reconnect...")
-				if err := ConnectToSequencer(); err != nil {
-					log.Errorf("Failed to reconnect to sequencer: %v", err)
-				}
-			}
-			return nil, fmt.Errorf("failed to create stream: %w", err)
-		}
-		log.Debug("Successfully created new stream")
-		return stream, nil
+		return SequencerHostConn.NewStream(ctx, sequencerID, "/collect")
 	}
 
+	// Initialize the global stream pool
+	InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream, sequencerID)
+
 	s := &server{
-		streamPool: newStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream, sequencerID),
+		streamPool: GetLibp2pStreamPool(), // Use the global pool instead of creating a new one
 		limiter:    rate.NewLimiter(rate.Limit(300), 50), // Adjusted rate limit
 	}
 	return s

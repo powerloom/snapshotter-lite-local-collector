@@ -13,7 +13,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type streamPool struct {
+// Global variables for service-wide access
+var (
+	libp2pStreamPool   *StreamPool
+	libp2pStreamPoolMu sync.RWMutex
+)
+
+// StreamPool manages a pool of libp2p network streams
+type StreamPool struct {
 	mu           sync.Mutex
 	streams      []network.Stream
 	maxSize      int
@@ -23,9 +30,9 @@ type streamPool struct {
 	cancel       context.CancelFunc
 }
 
-func newStreamPool(maxSize int, createStream func() (network.Stream, error), sequencerID peer.ID) *streamPool {
+func newStreamPool(maxSize int, createStream func() (network.Stream, error), sequencerID peer.ID) *StreamPool {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &streamPool{
+	return &StreamPool{
 		streams:      make([]network.Stream, 0, maxSize),
 		maxSize:      maxSize,
 		createStream: createStream,
@@ -35,7 +42,19 @@ func newStreamPool(maxSize int, createStream func() (network.Stream, error), seq
 	}
 }
 
-func (p *streamPool) GetStream() (network.Stream, error) {
+func InitLibp2pStreamPool(maxSize int, createStream func() (network.Stream, error), sequencerID peer.ID) {
+	libp2pStreamPoolMu.Lock()
+	defer libp2pStreamPoolMu.Unlock()
+	libp2pStreamPool = newStreamPool(maxSize, createStream, sequencerID)
+}
+
+func GetLibp2pStreamPool() *StreamPool {
+	libp2pStreamPoolMu.RLock()
+	defer libp2pStreamPoolMu.RUnlock()
+	return libp2pStreamPool
+}
+
+func (p *StreamPool) GetStream() (network.Stream, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -51,7 +70,7 @@ func (p *streamPool) GetStream() (network.Stream, error) {
 	return p.createNewStreamWithRetry()
 }
 
-func (p *streamPool) ReturnStream(stream network.Stream) {
+func (p *StreamPool) ReturnStream(stream network.Stream) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -67,7 +86,7 @@ func (p *streamPool) ReturnStream(stream network.Stream) {
 	}
 }
 
-func (p *streamPool) pingStream(stream network.Stream) error {
+func (p *StreamPool) pingStream(stream network.Stream) error {
 	if err := stream.SetDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
 		return err
 	}
@@ -77,7 +96,7 @@ func (p *streamPool) pingStream(stream network.Stream) error {
 	return err
 }
 
-func (p *streamPool) createNewStreamWithRetry() (network.Stream, error) {
+func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 	var stream network.Stream
 	var err error
 
@@ -85,19 +104,26 @@ func (p *streamPool) createNewStreamWithRetry() (network.Stream, error) {
 		// Check connection status before attempting to create stream
 		if SequencerHostConn.Network().Connectedness(p.sequencerID) != network.Connected {
 			log.Warn("Connection to sequencer not established, attempting to reconnect...")
-			if err := ConnectToSequencer(); err != nil {
-				return fmt.Errorf("failed to reconnect to sequencer: %w", err)
+			if err := AtomicConnectionReset(); err != nil {
+				return fmt.Errorf("failed to perform atomic reset: %w", err)
 			}
-			log.Info("Successfully reconnected to sequencer")
 		}
 
 		stream, err = p.createStream()
 		if err != nil {
 			if strings.Contains(err.Error(), "resource limit exceeded") {
-				log.Warn("Resource limit exceeded, forcing reconnection to sequencer...")
-				if err := ConnectToSequencer(); err != nil {
-					log.Errorf("Failed to reconnect to sequencer: %v", err)
+				log.Warn("Resource limit exceeded, performing atomic reset...")
+				
+				if err := AtomicConnectionReset(); err != nil {
+					return fmt.Errorf("atomic reset failed: %w", err)
 				}
+
+				// Try creating the stream again with fresh connection
+				stream, err = p.createStream()
+				if err != nil {
+					return fmt.Errorf("failed to create stream even after reset: %w", err)
+				}
+				return nil
 			}
 			log.Warnf("Failed to create stream: %v. Retrying...", err)
 			return err
@@ -116,19 +142,27 @@ func (p *streamPool) createNewStreamWithRetry() (network.Stream, error) {
 	return stream, nil
 }
 
-func (p *streamPool) Stop() {
+// Modified stream pool cleanup to be more aggressive
+func (p *StreamPool) Stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	p.cancel()
 
+	// Aggressively close all streams
 	for _, stream := range p.streams {
+		if err := stream.Reset(); err != nil {
+			log.Warnf("Error resetting stream: %v", err)
+		}
 		stream.Close()
 	}
 	p.streams = nil
+
+	// Wait a moment for cleanup
+	time.Sleep(1 * time.Second)
 }
 
-func (p *streamPool) RemoveStream(s network.Stream) {
+func (p *StreamPool) RemoveStream(s network.Stream) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

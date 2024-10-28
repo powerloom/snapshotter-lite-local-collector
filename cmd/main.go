@@ -25,14 +25,16 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				// Check connection and attempt to create a test stream
+				// Check both basic connection status and resource limits
 				if service.SequencerHostConn.Network().Connectedness(service.SequencerId) != network.Connected ||
 					service.IsResourceLimitExceeded() {
-					log.Warn("Lost connection to sequencer or resource limit exceeded. Attempting to reconnect...")
-					if err := service.ConnectToSequencer(); err != nil {
-						log.Errorf("Failed to reconnect to sequencer: %v", err)
+					
+					log.Warn("Connection issue or resource limit exceeded. Attempting atomic reset...")
+					
+					if err := service.AtomicConnectionReset(); err != nil {
+						log.Errorf("Failed to perform atomic reset: %v", err)
 					} else {
-						log.Info("Successfully reconnected to sequencer")
+						log.Info("Successfully completed atomic reset")
 					}
 				}
 			}
