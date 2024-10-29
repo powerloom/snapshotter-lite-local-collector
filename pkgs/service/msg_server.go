@@ -12,8 +12,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
-	ma "github.com/multiformats/go-multiaddr"
 	"github.com/rcrowley/go-metrics"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
@@ -23,8 +21,7 @@ import (
 // server is used to implement submission.SubmissionService.
 type server struct {
 	pkgs.UnimplementedSubmissionServer
-	streamPool *StreamPool
-	limiter    *rate.Limiter
+	limiter *rate.Limiter
 }
 
 var _ pkgs.SubmissionServer = &server{}
@@ -39,47 +36,19 @@ type serverMetrics struct {
 // NewMsgServerImpl returns an implementation of the SubmissionService interface
 // for the provided Keeper.
 func NewMsgServerImplV2() pkgs.SubmissionServer {
-	var sequencerAddr ma.Multiaddr
-	var err error
-
-	sequencer, err := fetchSequencer("https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/sequencers.json", config.SettingsObj.DataMarketAddress)
-	if err != nil {
-		log.Debugln(err.Error())
-		return nil
-	}
-	sequencerAddr, err = ma.NewMultiaddr(sequencer.Maddr)
-	if err != nil {
-		log.Debugln(err.Error())
-		return nil
-	}
-
-	sequencerInfo, err := peer.AddrInfoFromP2pAddr(sequencerAddr)
-
-	if err != nil {
-		log.Errorln("Error converting MultiAddr to AddrInfo: ", err.Error())
-		return nil
-	}
-
-	sequencerID := sequencerInfo.ID
-
-	if err := SequencerHostConn.Connect(context.Background(), *sequencerInfo); err != nil {
-		log.Debugln("Failed to connect to the Sequencer:", err)
-	} else {
-		log.Debugln("Successfully connected to the Sequencer: ", sequencerAddr.String())
-	}
-
 	createStream := func() (network.Stream, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		return SequencerHostConn.NewStream(ctx, sequencerID, "/collect")
+		return SequencerHostConn.NewStream(ctx, SequencerId, "/collect")
 	}
 
-	// Initialize the global stream pool
-	InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream, sequencerID)
+	// Initialize the global stream pool if not already initialized
+	if GetLibp2pStreamPool() == nil {
+		InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream, SequencerId)
+	}
 
 	s := &server{
-		streamPool: GetLibp2pStreamPool(),                // Use the global pool instead of creating a new one
-		limiter:    rate.NewLimiter(rate.Limit(300), 50), // Adjusted rate limit
+		limiter: rate.NewLimiter(rate.Limit(300), 50),
 	}
 	return s
 }
@@ -146,24 +115,32 @@ func StartSubmissionServer(server pkgs.SubmissionServer) {
 func (s *server) writeToStream(data []byte) error {
 	maxRetries := 5
 	for i := 0; i < maxRetries; i++ {
-		stream, err := s.streamPool.GetStream()
+		stream, err := GetLibp2pStreamPool().GetStream()
 		if err != nil {
 			log.Warnf("Failed to get stream (attempt %d/%d): %v", i+1, maxRetries, err)
-			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			time.Sleep(time.Second * time.Duration(i+1))
 			continue
 		}
 
-		_, err = stream.Write(data)
+		n, err := stream.Write(data)
 		if err != nil {
 			log.Warnf("Failed to write to stream (attempt %d/%d): %v", i+1, maxRetries, err)
 			stream.Reset()
-			s.streamPool.RemoveStream(stream)
-			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			GetLibp2pStreamPool().RemoveStream(stream)
+			time.Sleep(time.Second * time.Duration(i+1))
 			continue
 		}
 
-		s.streamPool.ReturnStream(stream)
-		return nil // Success
+		// Add length verification
+		if n != len(data) {
+			log.Warnf("Incomplete write: wrote %d of %d bytes", n, len(data))
+			stream.Reset()
+			GetLibp2pStreamPool().RemoveStream(stream)
+			continue
+		}
+
+		GetLibp2pStreamPool().ReturnStream(stream)
+		return nil
 	}
 
 	return fmt.Errorf("failed to write to stream after %d attempts", maxRetries)

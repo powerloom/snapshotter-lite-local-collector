@@ -61,12 +61,16 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 	if len(p.streams) > 0 {
 		stream := p.streams[len(p.streams)-1]
 		p.streams = p.streams[:len(p.streams)-1]
+		
 		if err := p.pingStream(stream); err == nil {
+			log.Debug("Retrieved valid stream from pool")
 			return stream, nil
 		}
-		// If ping fails, close the stream and create a new one
+		log.Warn("Ping failed for pooled stream, closing and creating new one")
 		stream.Close()
 	}
+	
+	log.Debug("Creating new stream")
 	return p.createNewStreamWithRetry()
 }
 
@@ -75,25 +79,40 @@ func (p *StreamPool) ReturnStream(stream network.Stream) {
 	defer p.mu.Unlock()
 
 	if err := p.pingStream(stream); err != nil {
+		log.Warnf("Stream failed ping check on return: %v", err)
 		stream.Close()
 		return
 	}
 
 	if len(p.streams) < p.maxSize {
+		log.Debug("Returning valid stream to pool")
 		p.streams = append(p.streams, stream)
 	} else {
+		log.Debug("Pool at capacity, closing stream")
 		stream.Close()
 	}
 }
 
 func (p *StreamPool) pingStream(stream network.Stream) error {
-	if err := stream.SetDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
-		return err
+	if err := stream.SetDeadline(time.Now().Add(1 * time.Second)); err != nil {
+		return fmt.Errorf("failed to set deadline: %w", err)
 	}
 	defer stream.SetDeadline(time.Time{})
 
-	_, err := stream.Write([]byte("ping"))
-	return err
+	pingMsg := []byte("ping")
+	n, err := stream.Write(pingMsg)
+	if err != nil {
+		return fmt.Errorf("failed to write ping: %w", err)
+	}
+	if n != len(pingMsg) {
+		return fmt.Errorf("incomplete ping write: wrote %d of %d bytes", n, len(pingMsg))
+	}
+
+	if err := stream.Flush(); err != nil {
+		return fmt.Errorf("failed to flush stream after ping: %w", err)
+	}
+
+	return nil
 }
 
 func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
