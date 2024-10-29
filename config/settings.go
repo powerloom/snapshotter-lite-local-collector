@@ -20,12 +20,12 @@ type Settings struct {
 	TrustedRelayersListUrl string
 	DataMarketAddress      string
 	MaxStreamPoolSize      int
-	HealthCheckInterval    int // Added based on STREAM_POOL_HEALTH_CHECK_INTERVAL
+	DataMarketInRequest    bool
 }
 
 func LoadConfig() {
 	config := Settings{}
-	
+
 	// Required fields
 	if port := os.Getenv("LOCAL_COLLECTOR_PORT"); port != "" {
 		config.PortNumber = port
@@ -38,11 +38,15 @@ func LoadConfig() {
 	} else {
 		config.DataMarketAddress = contract
 	}
-
+	if value := os.Getenv("DATA_MARKET_IN_REQUEST"); value == "true" {
+		config.DataMarketInRequest = true
+	} else {
+		config.DataMarketInRequest = false
+	}
 	// Optional fields with defaults
 	config.PowerloomReportingUrl = os.Getenv("POWERLOOM_REPORTING_URL")
 	config.SignerAccountAddress = os.Getenv("SIGNER_ACCOUNT_ADDRESS")
-	config.TrustedRelayersListUrl = getEnvWithDefault("TRUSTED_RELAYERS_LIST_URL", 
+	config.TrustedRelayersListUrl = getEnvWithDefault("TRUSTED_RELAYERS_LIST_URL",
 		"https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/relayers.json")
 
 	// Load private key from file or env
@@ -50,7 +54,6 @@ func LoadConfig() {
 
 	// Numeric values with defaults
 	config.MaxStreamPoolSize = getEnvAsInt("MAX_STREAM_POOL_SIZE", 2)
-	config.HealthCheckInterval = getEnvAsInt("STREAM_POOL_HEALTH_CHECK_INTERVAL", 30)
 
 	SettingsObj = &config
 }
