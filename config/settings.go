@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -21,6 +22,12 @@ type Settings struct {
 	DataMarketAddress      string
 	MaxStreamPoolSize      int
 	DataMarketInRequest    bool
+
+	// Stream Pool Configuration
+	StreamHealthCheckTimeout time.Duration
+	StreamWriteTimeout       time.Duration
+	MaxWriteRetries          int
+	MaxConcurrentWrites      int
 }
 
 func LoadConfig() {
@@ -53,7 +60,11 @@ func LoadConfig() {
 	config.RelayerPrivateKey = loadPrivateKey()
 
 	// Numeric values with defaults
-	config.MaxStreamPoolSize = getEnvAsInt("MAX_STREAM_POOL_SIZE", 2)
+	config.MaxStreamPoolSize = getEnvAsInt("STREAM_POOL_SIZE", 50)
+	config.StreamHealthCheckTimeout = time.Duration(getEnvAsInt("STREAM_HEALTH_CHECK_TIMEOUT_MS", 2000)) * time.Millisecond
+	config.StreamWriteTimeout = time.Duration(getEnvAsInt("STREAM_WRITE_TIMEOUT_MS", 5000)) * time.Millisecond
+	config.MaxWriteRetries = getEnvAsInt("MAX_WRITE_RETRIES", 5)
+	config.MaxConcurrentWrites = getEnvAsInt("MAX_CONCURRENT_WRITES", 1000)
 
 	SettingsObj = &config
 }

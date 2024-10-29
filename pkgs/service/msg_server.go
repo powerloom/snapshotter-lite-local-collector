@@ -11,8 +11,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/rcrowley/go-metrics"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
@@ -21,34 +19,24 @@ import (
 // server is used to implement submission.SubmissionService.
 type server struct {
 	pkgs.UnimplementedSubmissionServer
-	limiter *rate.Limiter
+	limiter        *rate.Limiter
+	writeSemaphore chan struct{} // Control concurrent writes
 }
 
 var _ pkgs.SubmissionServer = &server{}
 
-type serverMetrics struct {
-	successfulSubmissions metrics.Counter
-	failedSubmissions     metrics.Counter
-	queueSize             metrics.Gauge
-	processingTime        metrics.Timer
-}
 
 // NewMsgServerImpl returns an implementation of the SubmissionService interface
 // for the provided Keeper.
 func NewMsgServerImplV2() pkgs.SubmissionServer {
-	createStream := func() (network.Stream, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		return SequencerHostConn.NewStream(ctx, SequencerId, "/collect")
-	}
-
-	// Initialize the global stream pool if not already initialized
-	if GetLibp2pStreamPool() == nil {
-		InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream, SequencerId)
+	maxConcurrent := config.SettingsObj.MaxConcurrentWrites
+	if maxConcurrent == 0 {
+		maxConcurrent = 50 // fallback default
 	}
 
 	s := &server{
-		limiter: rate.NewLimiter(rate.Limit(300), 50),
+		limiter:        rate.NewLimiter(rate.Limit(300), 50),
+		writeSemaphore: make(chan struct{}, maxConcurrent),
 	}
 	return s
 }
@@ -77,15 +65,35 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 		checksummedAddress := common.HexToAddress(config.SettingsObj.DataMarketAddress).Hex()
 		submissionBytes = append([]byte(checksummedAddress), submissionBytes...)
 	}
-	go func() {
-		err := s.writeToStream(submissionBytes)
 
-		if err != nil {
-			log.Errorf("❌ Failed to process submission: %v", err)
-		} else {
-			log.Infof("✅ Successfully processed submission with ID: %s", submissionId)
-		}
-	}()
+	// Launch goroutine but with controlled concurrency
+	select {
+	case s.writeSemaphore <- struct{}{}:
+		go func() {
+			defer func() { <-s.writeSemaphore }()
+
+			err := s.writeToStream(submissionBytes)
+			if err != nil {
+				log.Errorf("❌ Failed to process submission %s: %v", submissionId, err)
+				return
+			}
+			log.Infof("✅ Successfully processed submission %s", submissionId)
+		}()
+	default:
+		// If we can't acquire semaphore immediately, log and continue
+		log.Warnf("High write concurrency, submission %s queued", submissionId)
+		go func() {
+			s.writeSemaphore <- struct{}{} // Will block until capacity available
+			defer func() { <-s.writeSemaphore }()
+
+			err := s.writeToStream(submissionBytes)
+			if err != nil {
+				log.Errorf("❌ Failed to process submission %s: %v", submissionId, err)
+				return
+			}
+			log.Infof("✅ Successfully processed submission %s", submissionId)
+		}()
+	}
 
 	return &pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()}, nil
 }
@@ -113,35 +121,51 @@ func StartSubmissionServer(server pkgs.SubmissionServer) {
 }
 
 func (s *server) writeToStream(data []byte) error {
-	maxRetries := 5
+	maxRetries := config.SettingsObj.MaxWriteRetries
+	if maxRetries == 0 {
+		maxRetries = 3 // fallback default
+	}
+
+	var lastErr error
 	for i := 0; i < maxRetries; i++ {
 		stream, err := GetLibp2pStreamPool().GetStream()
 		if err != nil {
-			log.Warnf("Failed to get stream (attempt %d/%d): %v", i+1, maxRetries, err)
-			time.Sleep(time.Second * time.Duration(i+1))
+			lastErr = fmt.Errorf("attempt %d: failed to get stream: %w", i+1, err)
+			log.Warnf("%v", lastErr)
 			continue
+		}
+
+		// Set write deadline
+		writeTimeout := config.SettingsObj.StreamWriteTimeout
+		if writeTimeout > 0 {
+			if err := stream.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+				log.Warnf("Failed to set write deadline: %v", err)
+			}
 		}
 
 		n, err := stream.Write(data)
+
+		// Clear write deadline
+		stream.SetWriteDeadline(time.Time{})
+
 		if err != nil {
-			log.Warnf("Failed to write to stream (attempt %d/%d): %v", i+1, maxRetries, err)
+			lastErr = fmt.Errorf("attempt %d: write failed: %w", i+1, err)
+			log.Warnf("%v", lastErr)
 			stream.Reset()
-			GetLibp2pStreamPool().RemoveStream(stream)
-			time.Sleep(time.Second * time.Duration(i+1))
 			continue
 		}
 
-		// Add length verification
 		if n != len(data) {
-			log.Warnf("Incomplete write: wrote %d of %d bytes", n, len(data))
+			lastErr = fmt.Errorf("attempt %d: incomplete write: %d/%d bytes", i+1, n, len(data))
+			log.Warnf("%v", lastErr)
 			stream.Reset()
-			GetLibp2pStreamPool().RemoveStream(stream)
 			continue
 		}
 
+		log.Debugf("Successfully wrote %d bytes on attempt %d", n, i+1)
 		GetLibp2pStreamPool().ReturnStream(stream)
 		return nil
 	}
 
-	return fmt.Errorf("failed to write to stream after %d attempts", maxRetries)
+	return fmt.Errorf("failed after %d attempts, last error: %v", maxRetries, lastErr)
 }

@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
+	"proto-snapshot-server/config"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -21,31 +23,45 @@ var (
 
 // StreamPool manages a pool of libp2p network streams
 type StreamPool struct {
-	mu           sync.Mutex
-	streams      []network.Stream
-	maxSize      int
-	createStream func() (network.Stream, error)
-	sequencerID  peer.ID
-	ctx          context.Context
-	cancel       context.CancelFunc
-}
-
-func newStreamPool(maxSize int, createStream func() (network.Stream, error), sequencerID peer.ID) *StreamPool {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &StreamPool{
-		streams:      make([]network.Stream, 0, maxSize),
-		maxSize:      maxSize,
-		createStream: createStream,
-		sequencerID:  sequencerID,
-		ctx:          ctx,
-		cancel:       cancel,
+	mu          sync.Mutex
+	streams     []network.Stream
+	maxSize     int
+	sequencerID peer.ID
+	metrics     struct {
+		activeStreams  int
+		failedWrites  int64
+		successWrites int64
 	}
 }
 
-func InitLibp2pStreamPool(maxSize int, createStream func() (network.Stream, error), sequencerID peer.ID) {
+// createStream is now a method of StreamPool
+func (p *StreamPool) createStream() (network.Stream, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), config.SettingsObj.StreamWriteTimeout)
+	defer cancel()
+
+	stream, err := SequencerHostConn.NewStream(ctx, p.sequencerID, "/collect")
+	if err != nil {
+		return nil, fmt.Errorf("new stream creation failed: %w", err)
+	}
+
+	// Set initial stream properties
+	if err := stream.SetDeadline(time.Time{}); err != nil {
+		stream.Reset()
+		return nil, fmt.Errorf("failed to clear deadline: %w", err)
+	}
+
+	return stream, nil
+}
+
+func InitLibp2pStreamPool(maxSize int) {
 	libp2pStreamPoolMu.Lock()
 	defer libp2pStreamPoolMu.Unlock()
-	libp2pStreamPool = newStreamPool(maxSize, createStream, sequencerID)
+
+	libp2pStreamPool = &StreamPool{
+		maxSize:     maxSize,
+		sequencerID: SequencerId, // Using global SequencerId
+		streams:     make([]network.Stream, 0, maxSize),
+	}
 }
 
 func GetLibp2pStreamPool() *StreamPool {
@@ -58,60 +74,71 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// First try to get an existing stream
 	if len(p.streams) > 0 {
 		stream := p.streams[len(p.streams)-1]
 		p.streams = p.streams[:len(p.streams)-1]
 		
 		if err := p.pingStream(stream); err == nil {
-			log.Debug("Retrieved valid stream from pool")
+			p.metrics.activeStreams++
 			return stream, nil
 		}
-		log.Warn("Ping failed for pooled stream, closing and creating new one")
+		log.Debug("Existing stream failed health check, creating new one")
 		stream.Close()
 	}
-	
-	log.Debug("Creating new stream")
-	return p.createNewStreamWithRetry()
+
+	// Create new stream if needed
+	stream, err := p.createNewStreamWithRetry()
+	if err != nil {
+		atomic.AddInt64(&p.metrics.failedWrites, 1)
+		return nil, fmt.Errorf("failed to create new stream: %w", err)
+	}
+
+	p.metrics.activeStreams++
+	return stream, nil
 }
 
 func (p *StreamPool) ReturnStream(stream network.Stream) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// Basic health check before returning to pool
 	if err := p.pingStream(stream); err != nil {
-		log.Warnf("Stream failed ping check on return: %v", err)
+		log.Debug("Stream failed health check on return, closing")
 		stream.Close()
+		p.metrics.activeStreams--
 		return
 	}
 
 	if len(p.streams) < p.maxSize {
-		log.Debug("Returning valid stream to pool")
 		p.streams = append(p.streams, stream)
 	} else {
 		log.Debug("Pool at capacity, closing stream")
 		stream.Close()
 	}
+	p.metrics.activeStreams--
+	atomic.AddInt64(&p.metrics.successWrites, 1)
 }
 
 func (p *StreamPool) pingStream(stream network.Stream) error {
-	if err := stream.SetDeadline(time.Now().Add(1 * time.Second)); err != nil {
+	timeout := config.SettingsObj.StreamHealthCheckTimeout
+	if timeout == 0 {
+		timeout = 2 * time.Second // fallback default
+	}
+
+	if err := stream.SetDeadline(time.Now().Add(timeout)); err != nil {
+		log.Debugf("Failed to set stream deadline: %v", err)
 		return fmt.Errorf("failed to set deadline: %w", err)
 	}
 	defer stream.SetDeadline(time.Time{})
 
-	pingMsg := []byte("ping")
-	n, err := stream.Write(pingMsg)
-	if err != nil {
-		return fmt.Errorf("failed to write ping: %w", err)
-	}
-	if n != len(pingMsg) {
-		return fmt.Errorf("incomplete ping write: wrote %d of %d bytes", n, len(pingMsg))
+	// Simple connectivity check
+	if stream.Reset() != nil {
+		log.Debug("Stream failed health check")
+		return fmt.Errorf("stream is not alive")
 	}
 
-	if err := stream.Flush(); err != nil {
-		return fmt.Errorf("failed to flush stream after ping: %w", err)
-	}
-
+	log.Debug("Stream passed health check")
 	return nil
 }
 
@@ -120,38 +147,41 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 	var err error
 
 	operation := func() error {
-		// Check connection status before attempting to create stream
+		// Check connection before attempting stream creation
 		if SequencerHostConn.Network().Connectedness(p.sequencerID) != network.Connected {
-			log.Warn("Connection to sequencer not established, attempting to reconnect...")
-			if err := AtomicConnectionReset(); err != nil {
-				return fmt.Errorf("failed to perform atomic reset: %w", err)
+			log.Debug("Connection not established, attempting to connect")
+			if err := ConnectToSequencer(); err != nil {
+				log.Warnf("Failed to connect to sequencer: %v", err)
+				return fmt.Errorf("sequencer connection failed: %w", err)
 			}
 		}
 
 		stream, err = p.createStream()
 		if err != nil {
-			if strings.Contains(err.Error(), "resource limit exceeded") {
-				log.Warn("Resource limit exceeded, performing atomic reset...")
-				
-				if err := AtomicConnectionReset(); err != nil {
-					return fmt.Errorf("atomic reset failed: %w", err)
-				}
-
-				// Try creating the stream again with fresh connection
-				stream, err = p.createStream()
-				if err != nil {
-					return fmt.Errorf("failed to create stream even after reset: %w", err)
-				}
-				return nil
+			if strings.Contains(err.Error(), "connection reset") || 
+			   strings.Contains(err.Error(), "broken pipe") {
+				log.Warn("Stream creation failed with connection error, will retry")
+				return err
 			}
-			log.Warnf("Failed to create stream: %v. Retrying...", err)
+			// For other errors, log more details
+			log.Errorf("Stream creation failed: %v", err)
 			return err
 		}
+
+		// Verify stream is usable
+		if err := p.pingStream(stream); err != nil {
+			stream.Reset()
+			return fmt.Errorf("stream verification failed: %w", err)
+		}
+
+		log.Debug("Successfully created and verified new stream")
 		return nil
 	}
 
 	backOff := backoff.NewExponentialBackOff()
-	backOff.MaxElapsedTime = 2 * time.Minute
+	backOff.MaxElapsedTime = config.SettingsObj.StreamHealthCheckTimeout
+	backOff.InitialInterval = 100 * time.Millisecond
+	backOff.MaxInterval = 2 * time.Second
 
 	err = backoff.Retry(operation, backOff)
 	if err != nil {
@@ -165,8 +195,6 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 func (p *StreamPool) Stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
-	p.cancel()
 
 	// Aggressively close all streams
 	for _, stream := range p.streams {
