@@ -37,7 +37,7 @@ func handleConnectionClosed(network network.Network, conn network.Conn) {
 	activeConnections--
 }
 
-func ConfigureRelayer() {
+func ConfigureRelayer() error {
 	var err error
 	tcpAddr, _ := ma.NewMultiaddr("/ip4/0.0.0.0/tcp/9000")
 
@@ -73,7 +73,7 @@ func ConfigureRelayer() {
 
 	if err != nil {
 		log.Debugln("Error instantiating resource manager: ", err.Error())
-		return
+		return err
 	}
 
 	SequencerHostConn, err = libp2p.New(
@@ -92,7 +92,7 @@ func ConfigureRelayer() {
 
 	if err != nil {
 		log.Debugln("Error instantiating libp2p host: ", err.Error())
-		return
+		return err
 	}
 
 	log.Debugln("id: ", SequencerHostConn.ID().String())
@@ -117,6 +117,7 @@ func ConfigureRelayer() {
 	// ConnectToSequencer(peerId)
 
 	// ConnectToSequencer()
+	return nil
 }
 
 func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {

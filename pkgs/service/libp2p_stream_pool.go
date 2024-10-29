@@ -53,24 +53,40 @@ func (p *StreamPool) createStream() (network.Stream, error) {
 	return stream, nil
 }
 
-func InitLibp2pStreamPool(maxSize int) {
+func InitLibp2pStreamPool(maxSize int) error {
 	libp2pStreamPoolMu.Lock()
 	defer libp2pStreamPoolMu.Unlock()
 
-	libp2pStreamPool = &StreamPool{
-		maxSize:     maxSize,
-		sequencerID: SequencerId, // Using global SequencerId
-		streams:     make([]network.Stream, 0, maxSize),
+	if libp2pStreamPool != nil {
+		return fmt.Errorf("stream pool already initialized")
 	}
+
+	libp2pStreamPool = &StreamPool{
+		streams:     make([]network.Stream, 0, maxSize),
+		maxSize:     maxSize,
+		sequencerID: deps.sequencerId,
+	}
+
+	log.Infof("Stream pool initialized with max size: %d", maxSize)
+	return nil
 }
 
 func GetLibp2pStreamPool() *StreamPool {
 	libp2pStreamPoolMu.RLock()
 	defer libp2pStreamPoolMu.RUnlock()
+	
+	if libp2pStreamPool == nil {
+		log.Warn("Attempted to access uninitialized stream pool")
+		return nil
+	}
 	return libp2pStreamPool
 }
 
 func (p *StreamPool) GetStream() (network.Stream, error) {
+	if p == nil {
+		return nil, fmt.Errorf("stream pool is nil")
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

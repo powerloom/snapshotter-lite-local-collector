@@ -29,14 +29,16 @@ var _ pkgs.SubmissionServer = &server{}
 // NewMsgServerImpl returns an implementation of the SubmissionService interface
 // for the provided Keeper.
 func NewMsgServerImplV2() pkgs.SubmissionServer {
-	maxConcurrent := config.SettingsObj.MaxConcurrentWrites
-	if maxConcurrent == 0 {
-		maxConcurrent = 50 // fallback default
+	deps.mu.RLock()
+	if !deps.initialized {
+		deps.mu.RUnlock()
+		log.Fatal("Cannot create server: service not initialized")
 	}
+	deps.mu.RUnlock()
 
 	s := &server{
-		limiter:        rate.NewLimiter(rate.Limit(300), 50),
-		writeSemaphore: make(chan struct{}, maxConcurrent),
+		limiter: rate.NewLimiter(rate.Limit(300), 50),
+		writeSemaphore: make(chan struct{}, config.SettingsObj.MaxConcurrentWrites),
 	}
 	return s
 }
@@ -121,6 +123,19 @@ func StartSubmissionServer(server pkgs.SubmissionServer) {
 }
 
 func (s *server) writeToStream(data []byte) error {
+	deps.mu.RLock()
+	pool := deps.streamPool
+	deps.mu.RUnlock()
+
+	if pool == nil {
+		return fmt.Errorf("stream pool not available")
+	}
+
+	stream, err := pool.GetStream()
+	if err != nil {
+		return fmt.Errorf("failed to get stream: %w", err)
+	}
+
 	maxRetries := config.SettingsObj.MaxWriteRetries
 	if maxRetries == 0 {
 		maxRetries = 3 // fallback default
@@ -128,13 +143,6 @@ func (s *server) writeToStream(data []byte) error {
 
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
-		stream, err := GetLibp2pStreamPool().GetStream()
-		if err != nil {
-			lastErr = fmt.Errorf("attempt %d: failed to get stream: %w", i+1, err)
-			log.Warnf("%v", lastErr)
-			continue
-		}
-
 		// Set write deadline
 		writeTimeout := config.SettingsObj.StreamWriteTimeout
 		if writeTimeout > 0 {
@@ -163,7 +171,7 @@ func (s *server) writeToStream(data []byte) error {
 		}
 
 		log.Debugf("Successfully wrote %d bytes on attempt %d", n, i+1)
-		GetLibp2pStreamPool().ReturnStream(stream)
+		pool.ReturnStream(stream)
 		return nil
 	}
 
