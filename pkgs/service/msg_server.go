@@ -106,7 +106,7 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	// Convert to checksum address using go-ethereum's utility
 	checksummedAddress := common.HexToAddress(config.SettingsObj.DataMarketAddress).Hex()
 	submissionBytes = append(submissionBytes, []byte(checksummedAddress)...)
-
+	log.Debugln("Submission bytes: ", submissionBytes)
 	go func() {
 		err := s.writeToStream(submissionBytes)
 
