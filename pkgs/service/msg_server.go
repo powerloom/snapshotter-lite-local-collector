@@ -9,6 +9,7 @@ import (
 	"proto-snapshot-server/pkgs"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -77,7 +78,7 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 	InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize, createStream, sequencerID)
 
 	s := &server{
-		streamPool: GetLibp2pStreamPool(), // Use the global pool instead of creating a new one
+		streamPool: GetLibp2pStreamPool(),                // Use the global pool instead of creating a new one
 		limiter:    rate.NewLimiter(rate.Limit(300), 50), // Adjusted rate limit
 	}
 	return s
@@ -102,6 +103,9 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	}
 
 	submissionBytes := append(submissionIdBytes, subBytes...)
+	// Convert to checksum address using go-ethereum's utility
+	checksummedAddress := common.HexToAddress(config.SettingsObj.DataMarketAddress).Hex()
+	submissionBytes = append(submissionBytes, []byte(checksummedAddress)...)
 
 	go func() {
 		err := s.writeToStream(submissionBytes)
