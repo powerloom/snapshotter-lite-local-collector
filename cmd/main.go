@@ -12,7 +12,6 @@ import (
 )
 
 func main() {
-	var wg sync.WaitGroup
 	helpers.InitLogger()
 	config.LoadConfig()
 	service.InitializeReportingService(config.SettingsObj.PowerloomReportingUrl, 5*time.Second)
@@ -28,9 +27,9 @@ func main() {
 				// Check both basic connection status and resource limits
 				if service.SequencerHostConn.Network().Connectedness(service.SequencerId) != network.Connected ||
 					service.IsResourceLimitExceeded() {
-					
+
 					log.Warn("Connection issue or resource limit exceeded. Attempting atomic reset...")
-					
+
 					if err := service.AtomicConnectionReset(); err != nil {
 						log.Errorf("Failed to perform atomic reset: %v", err)
 					} else {
@@ -40,7 +39,7 @@ func main() {
 			}
 		}
 	}()
-
+	var wg sync.WaitGroup
 	wg.Add(1)
 	go service.StartSubmissionServer(service.NewMsgServerImplV2())
 	wg.Wait()

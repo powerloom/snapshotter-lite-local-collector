@@ -18,6 +18,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /snapshotter-local-collector ./cmd/main
 # Use a minimal base image
 FROM scratch
 
+# Copy SSL certificates from the builder stage
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
 # Copy the binary from the builder stage
 COPY --from=builder /snapshotter-local-collector /snapshotter-local-collector
 
