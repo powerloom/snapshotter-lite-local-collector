@@ -10,5 +10,11 @@
     "maddr": "/dns/staging-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "dataMarketAddress": "0xB006AB33D47431E0C094321eF2061a12299B24f1",
     "environment": "staging"
+  },
+  {
+    "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
+    "maddr": "/dns/devnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
+    "dataMarketAddress": "0xa23F37D6928647Ce2Fbf9EC3c673DE94AFCF08EA",
+    "environment": "devnet"
   }
 ]
