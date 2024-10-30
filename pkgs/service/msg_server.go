@@ -123,12 +123,13 @@ func StartSubmissionServer(server pkgs.SubmissionServer) {
 }
 
 func (s *server) writeToStream(data []byte) error {
-	deps.mu.RLock()
-	pool := deps.streamPool
-	deps.mu.RUnlock()
-
+	pool := GetLibp2pStreamPool()
 	if pool == nil {
 		return fmt.Errorf("stream pool not available")
+	}
+
+	if pool.sequencerID.String() == "" {
+		return fmt.Errorf("invalid sequencer ID in pool")
 	}
 
 	stream, err := pool.GetStream()

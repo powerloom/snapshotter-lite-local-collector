@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"proto-snapshot-server/config"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,7 +27,7 @@ type StreamPool struct {
 	maxSize     int
 	sequencerID peer.ID
 	metrics     struct {
-		activeStreams  int
+		activeStreams int
 		failedWrites  int64
 		successWrites int64
 	}
@@ -36,10 +35,15 @@ type StreamPool struct {
 
 // createStream is now a method of StreamPool
 func (p *StreamPool) createStream() (network.Stream, error) {
+	hostConn, seqId := GetSequencerConnection()
+	if hostConn == nil || seqId.String() == "" {
+		return nil, fmt.Errorf("cannot create stream: invalid connection state")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), config.SettingsObj.StreamWriteTimeout)
 	defer cancel()
 
-	stream, err := SequencerHostConn.NewStream(ctx, p.sequencerID, "/collect")
+	stream, err := hostConn.NewStream(ctx, seqId, "/collect")
 	if err != nil {
 		return nil, fmt.Errorf("new stream creation failed: %w", err)
 	}
@@ -61,20 +65,24 @@ func InitLibp2pStreamPool(maxSize int) error {
 		return fmt.Errorf("stream pool already initialized")
 	}
 
+	if SequencerId.String() == "" {
+		return fmt.Errorf("cannot initialize pool: sequencer ID not set")
+	}
+
 	libp2pStreamPool = &StreamPool{
 		streams:     make([]network.Stream, 0, maxSize),
 		maxSize:     maxSize,
-		sequencerID: deps.sequencerId,
+		sequencerID: SequencerId,
 	}
 
-	log.Infof("Stream pool initialized with max size: %d", maxSize)
+	log.Infof("Stream pool initialized with sequencer ID: %s", libp2pStreamPool.sequencerID.String())
 	return nil
 }
 
 func GetLibp2pStreamPool() *StreamPool {
 	libp2pStreamPoolMu.RLock()
 	defer libp2pStreamPoolMu.RUnlock()
-	
+
 	if libp2pStreamPool == nil {
 		log.Warn("Attempted to access uninitialized stream pool")
 		return nil
@@ -83,35 +91,30 @@ func GetLibp2pStreamPool() *StreamPool {
 }
 
 func (p *StreamPool) GetStream() (network.Stream, error) {
-	if p == nil {
-		return nil, fmt.Errorf("stream pool is nil")
-	}
-
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// First try to get an existing stream
+	hostConn, seqId := GetSequencerConnection()
+	if hostConn == nil || seqId.String() == "" {
+		return nil, fmt.Errorf("invalid connection state")
+	}
+
+	// Check if we have a usable stream
 	if len(p.streams) > 0 {
 		stream := p.streams[len(p.streams)-1]
 		p.streams = p.streams[:len(p.streams)-1]
 		
-		if err := p.pingStream(stream); err == nil {
-			p.metrics.activeStreams++
-			return stream, nil
+		// Verify stream is on current connection
+		if stream.Conn().ID() == hostConn.ID().String() {
+			if err := p.pingStream(stream); err == nil {
+				return stream, nil
+			}
 		}
-		log.Debug("Existing stream failed health check, creating new one")
+		// Stream is from old connection or unhealthy
 		stream.Close()
 	}
-
-	// Create new stream if needed
-	stream, err := p.createNewStreamWithRetry()
-	if err != nil {
-		atomic.AddInt64(&p.metrics.failedWrites, 1)
-		return nil, fmt.Errorf("failed to create new stream: %w", err)
-	}
-
-	p.metrics.activeStreams++
-	return stream, nil
+	
+	return p.createNewStreamWithRetry()
 }
 
 func (p *StreamPool) ReturnStream(stream network.Stream) {
@@ -159,38 +162,29 @@ func (p *StreamPool) pingStream(stream network.Stream) error {
 }
 
 func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
+	hostConn, seqId := GetSequencerConnection()
+	if hostConn == nil || seqId.String() == "" {
+		return nil, fmt.Errorf("invalid sequencer connection state")
+	}
+
 	var stream network.Stream
 	var err error
 
 	operation := func() error {
-		// Check connection before attempting stream creation
-		if SequencerHostConn.Network().Connectedness(p.sequencerID) != network.Connected {
-			log.Debug("Connection not established, attempting to connect")
-			if err := ConnectToSequencer(); err != nil {
-				log.Warnf("Failed to connect to sequencer: %v", err)
-				return fmt.Errorf("sequencer connection failed: %w", err)
+		hostConn, seqId := GetSequencerConnection() // Get fresh connection state in retry loop
+
+		if hostConn.Network().Connectedness(seqId) != network.Connected {
+			log.Debugf("Connection not established, attempting to connect to %s", seqId.String())
+			if err := ReConnectToSequencer(); err != nil {
+				return fmt.Errorf("failed to connect to sequencer: %w", err)
 			}
 		}
 
 		stream, err = p.createStream()
 		if err != nil {
-			if strings.Contains(err.Error(), "connection reset") || 
-			   strings.Contains(err.Error(), "broken pipe") {
-				log.Warn("Stream creation failed with connection error, will retry")
-				return err
-			}
-			// For other errors, log more details
-			log.Errorf("Stream creation failed: %v", err)
+			log.Errorf("Stream creation failed for sequencer %s: %v", seqId.String(), err)
 			return err
 		}
-
-		// Verify stream is usable
-		if err := p.pingStream(stream); err != nil {
-			stream.Reset()
-			return fmt.Errorf("stream verification failed: %w", err)
-		}
-
-		log.Debug("Successfully created and verified new stream")
 		return nil
 	}
 
@@ -245,4 +239,29 @@ func (p *StreamPool) RemoveStream(s network.Stream) {
 	log.Warn("Attempted to remove a stream that wasn't in the pool")
 	// Close the stream anyway, just in case
 	s.Close()
+}
+
+func RebuildStreamPool() error {
+	libp2pStreamPoolMu.Lock()
+	defer libp2pStreamPoolMu.Unlock()
+
+	if libp2pStreamPool == nil {
+		return fmt.Errorf("cannot rebuild: stream pool not initialized")
+	}
+
+	// Close all existing streams
+	libp2pStreamPool.mu.Lock()
+	for _, stream := range libp2pStreamPool.streams {
+		if err := stream.Close(); err != nil {
+			log.Warnf("Error closing stream during rebuild: %v", err)
+		}
+	}
+	
+	// Reset the pool with same capacity
+	maxSize := libp2pStreamPool.maxSize
+	libp2pStreamPool.streams = make([]network.Stream, 0, maxSize)
+	libp2pStreamPool.mu.Unlock()
+
+	log.Info("Stream pool rebuilt after reconnection")
+	return nil
 }

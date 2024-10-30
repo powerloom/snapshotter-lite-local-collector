@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"proto-snapshot-server/config"
+	"sync"
 	"time"
 
 	circuitv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
@@ -23,11 +24,18 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var SequencerHostConn host.Host
-var SequencerId peer.ID
-var routingDiscovery *routing.RoutingDiscovery
+var (
+	SequencerHostConn host.Host
+	SequencerId       peer.ID
+	sequencerMu       sync.RWMutex
+	connManager       *connmgr.BasicConnMgr
+	tcpAddr           ma.Multiaddr
+	rm                network.ResourceManager
 
-var activeConnections int
+	routingDiscovery *routing.RoutingDiscovery
+
+	activeConnections int
+)
 
 func handleConnectionEstablished(network network.Network, conn network.Conn) {
 	activeConnections++
@@ -37,7 +45,17 @@ func handleConnectionClosed(network network.Network, conn network.Conn) {
 	activeConnections--
 }
 
+// Safe getter for sequencer connection and ID
+func GetSequencerConnection() (host.Host, peer.ID) {
+	sequencerMu.RLock()
+	defer sequencerMu.RUnlock()
+	return SequencerHostConn, SequencerId
+}
+
 func ConfigureRelayer() error {
+	sequencerMu.Lock()
+	defer sequencerMu.Unlock()
+
 	var err error
 	tcpAddr, _ := ma.NewMultiaddr("/ip4/0.0.0.0/tcp/9000")
 
@@ -144,41 +162,62 @@ func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
 	return false
 }
 
-func ConnectToSequencer() error {
-	//trustedRelayers := ConnectToTrustedRelayers(context.Background(), SequencerHostConn)
-	//isConnectedP2P := ConnectToSequencerP2P(trustedRelayers, SequencerHostConn)
-	//if isConnectedP2P {
-	//	log.Debugln("Successfully connected to the Sequencer: ", SequencerHostConn.Network().Connectedness(peer.ID(config.SettingsObj.SequencerId)), isConnectedP2P)
-	//	return
-	//} else {
-	//	log.Debugln("Failed to connect to the Sequencer")
-	//}
+func ReConnectToSequencer() error {
+	sequencerMu.Lock()
+	defer sequencerMu.Unlock()
 
-	var sequencerAddr ma.Multiaddr
+	if SequencerId.String() == "" {
+		return fmt.Errorf("cannot connect: sequencer ID not initialized")
+	}
+
+	// Clear existing connections first
+	if SequencerHostConn != nil {
+		log.Info("Clearing existing connection")
+		if err := SequencerHostConn.Close(); err != nil {
+			log.Warnf("Error closing existing connection: %v", err)
+		}
+	}
+
+	// Reconfigure the connection
 	var err error
+	SequencerHostConn, err = libp2p.New(
+		libp2p.EnableRelay(),
+		libp2p.ConnectionManager(connManager),
+		libp2p.ListenAddrs(tcpAddr),
+		libp2p.ResourceManager(rm),
+		libp2p.Security(libp2ptls.ID, libp2ptls.New),
+		libp2p.Security(noise.ID, noise.New),
+		libp2p.DefaultTransports,
+		libp2p.NATPortMap(),
+		libp2p.EnableRelayService(),
+		libp2p.EnableNATService(),
+		libp2p.EnableHolePunching(),
+		libp2p.Muxer(yamux.ID, yamux.DefaultTransport))
 
-	sequencer, err := fetchSequencer("https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/sequencers.json", config.SettingsObj.DataMarketAddress)
 	if err != nil {
-		log.Debugln(err.Error())
-	}
-	sequencerAddr, err = ma.NewMultiaddr(sequencer.Maddr)
-	if err != nil {
-		log.Debugln(err.Error())
+		log.Debugln("Error instantiating libp2p host: ", err.Error())
 		return err
 	}
 
-	sequencerInfo, err := peer.AddrInfoFromP2pAddr(sequencerAddr)
+	log.Debugln("id: ", SequencerHostConn.ID().String())
+	SequencerHostConn.Network().Notify(&network.NotifyBundle{
+		ConnectedF:    handleConnectionEstablished,
+		DisconnectedF: handleConnectionClosed,
+	})
 
-	if err != nil {
-		log.Errorln("Error converting MultiAddr to AddrInfo: ", err.Error())
+	// Set up a Kademlia DHT for the service host
+
+	kademliaDHT := ConfigureDHT(context.Background(), SequencerHostConn)
+
+	routingDiscovery = routing.NewRoutingDiscovery(kademliaDHT)
+
+	util.Advertise(context.Background(), routingDiscovery, config.SettingsObj.ClientRendezvousPoint)
+
+	// After reconnection, rebuild stream pool
+	if err := RebuildStreamPool(); err != nil {
+		return fmt.Errorf("failed to rebuild stream pool after reconnection: %w", err)
 	}
 
-	SequencerId = sequencerInfo.ID
-
-	if err := SequencerHostConn.Connect(context.Background(), *sequencerInfo); err != nil {
-		log.Debugln("Failed to connect to the Sequencer:", err)
-		return err
-	}
-	log.Debugln("Successfully connected to the Sequencer: ", sequencerAddr.String())
+	log.Infof("Successfully reconnected to sequencer and rebuilt stream pool")
 	return nil
 }
