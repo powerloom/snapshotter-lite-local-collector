@@ -55,7 +55,7 @@ func InitLibp2pStreamPool(maxSize int) error {
 	defer libp2pStreamPoolMu.Unlock()
 
 	// Verify connection state
-	hostConn, seqId, err := GetSequencerConnection()
+	_, seqId, err := GetSequencerConnection()
 	if err != nil {
 		return fmt.Errorf("cannot initialize pool: %w", err)
 	}
@@ -77,7 +77,7 @@ func InitLibp2pStreamPool(maxSize int) error {
 	}
 
 	libp2pStreamPool = pool
-	log.Infof("Stream pool initialized with %d/%d streams for sequencer: %s", 
+	log.Infof("Stream pool initialized with %d/%d streams for sequencer: %s",
 		len(pool.streams), maxSize, seqId.String())
 	return nil
 }
