@@ -30,12 +30,12 @@ func InitializeService() error {
 		return nil
 	}
 
-	// 1. Configure Relayer (sets up host connection)
-	if err := ConfigureRelayer(); err != nil {
-		return fmt.Errorf("failed to configure relayer: %w", err)
+	// Establish sequencer connection
+	if err := EstablishSequencerConnection(); err != nil {
+		return fmt.Errorf("failed to establish sequencer connection: %w", err)
 	}
 
-	// 2. Verify both connection and sequencer ID
+	// Verify connection state
 	if SequencerHostConn == nil {
 		return fmt.Errorf("sequencer host connection not initialized")
 	}
@@ -46,23 +46,12 @@ func InitializeService() error {
 	deps.hostConn = SequencerHostConn
 	deps.sequencerId = SequencerId
 
-	log.Infof("Initialized connection to sequencer: %s", deps.sequencerId.String())
-
-	// 3. Initialize stream pool with verified sequencer ID
+	// Initialize stream pool
 	if err := InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize); err != nil {
 		return fmt.Errorf("failed to initialize stream pool: %w", err)
 	}
 
-	// 4. Verify stream pool initialization
-	pool := GetLibp2pStreamPool()
-	if pool == nil {
-		return fmt.Errorf("stream pool initialization failed")
-	}
-	if pool.sequencerID.String() == "" {
-		return fmt.Errorf("stream pool initialized with empty sequencer ID")
-	}
-
-	deps.streamPool = pool
+	deps.streamPool = GetLibp2pStreamPool()
 	deps.initialized = true
 	
 	log.Info("Service initialization complete with sequencer ID: ", deps.sequencerId.String())
