@@ -60,7 +60,7 @@ func LoadConfig() {
 	config.RelayerPrivateKey = loadPrivateKey()
 
 	// Numeric values with defaults
-	config.MaxStreamPoolSize = getEnvAsInt("STREAM_POOL_SIZE", 50)
+	config.MaxStreamPoolSize = getEnvAsInt("MAX_STREAM_POOL_SIZE", 50)
 	config.StreamHealthCheckTimeout = time.Duration(getEnvAsInt("STREAM_HEALTH_CHECK_TIMEOUT_MS", 2000)) * time.Millisecond
 	config.StreamWriteTimeout = time.Duration(getEnvAsInt("STREAM_WRITE_TIMEOUT_MS", 5000)) * time.Millisecond
 	config.MaxWriteRetries = getEnvAsInt("MAX_WRITE_RETRIES", 5)
