@@ -25,7 +25,6 @@ type server struct {
 
 var _ pkgs.SubmissionServer = &server{}
 
-
 // NewMsgServerImpl returns an implementation of the SubmissionService interface
 // for the provided Keeper.
 func NewMsgServerImplV2() pkgs.SubmissionServer {
@@ -37,7 +36,7 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 	deps.mu.RUnlock()
 
 	s := &server{
-		limiter: rate.NewLimiter(rate.Limit(300), 50),
+		limiter:        rate.NewLimiter(rate.Limit(300), 50),
 		writeSemaphore: make(chan struct{}, config.SettingsObj.MaxConcurrentWrites),
 	}
 	return s
@@ -74,7 +73,7 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 		go func() {
 			defer func() { <-s.writeSemaphore }()
 
-			err := s.writeToStream(submissionBytes)
+			err := s.writeToStream(ctx, submissionBytes, submissionId.String(), submission)
 			if err != nil {
 				log.Errorf("❌ Failed to process submission %s: %v", submissionId, err)
 				return
@@ -88,7 +87,7 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 			s.writeSemaphore <- struct{}{} // Will block until capacity available
 			defer func() { <-s.writeSemaphore }()
 
-			err := s.writeToStream(submissionBytes)
+			err := s.writeToStream(ctx, submissionBytes, submissionId.String(), submission)
 			if err != nil {
 				log.Errorf("❌ Failed to process submission %s: %v", submissionId, err)
 				return
@@ -122,59 +121,63 @@ func StartSubmissionServer(server pkgs.SubmissionServer) {
 	}
 }
 
-func (s *server) writeToStream(data []byte) error {
+func (s *server) writeToStream(ctx context.Context, data []byte, submissionId string, submission *pkgs.SnapshotSubmission) error {
 	pool := GetLibp2pStreamPool()
 	if pool == nil {
 		return fmt.Errorf("stream pool not available")
 	}
 
-	if pool.sequencerID.String() == "" {
-		return fmt.Errorf("invalid sequencer ID in pool")
-	}
-
 	stream, err := pool.GetStream()
 	if err != nil {
+		log.Errorf("❌ Failed to get stream for submission %s (Project: %s, Epoch: %d): %v",
+			submissionId, submission.Request.ProjectId, submission.Request.EpochId, err)
 		return fmt.Errorf("failed to get stream: %w", err)
 	}
 
-	maxRetries := config.SettingsObj.MaxWriteRetries
-	if maxRetries == 0 {
-		maxRetries = 3 // fallback default
-	}
-
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		// Set write deadline
-		writeTimeout := config.SettingsObj.StreamWriteTimeout
-		if writeTimeout > 0 {
-			if err := stream.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
-				log.Warnf("Failed to set write deadline: %v", err)
-			}
-		}
-
-		n, err := stream.Write(data)
-
-		// Clear write deadline
-		stream.SetWriteDeadline(time.Time{})
-
-		if err != nil {
-			lastErr = fmt.Errorf("attempt %d: write failed: %w", i+1, err)
-			log.Warnf("%v", lastErr)
+	success := false
+	defer func() {
+		if !success {
+			log.Errorf("❌ Failed to process submission %s (Project: %s, Epoch: %d)",
+				submissionId, submission.Request.ProjectId, submission.Request.EpochId)
 			stream.Reset()
-			continue
+			stream.Close()
+		} else {
+			log.Infof("✅ Successfully processed submission %s (Project: %s, Epoch: %d)",
+				submissionId, submission.Request.ProjectId, submission.Request.EpochId)
 		}
-
-		if n != len(data) {
-			lastErr = fmt.Errorf("attempt %d: incomplete write: %d/%d bytes", i+1, n, len(data))
-			log.Warnf("%v", lastErr)
-			stream.Reset()
-			continue
-		}
-
-		log.Debugf("Successfully wrote %d bytes on attempt %d", n, i+1)
+		// Always return to pool - let pool's health check handle cleanup
 		pool.ReturnStream(stream)
-		return nil
+	}()
+
+	maxRetries := config.SettingsObj.MaxWriteRetries
+	for i := 0; i < maxRetries; i++ {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("operation cancelled for submission %s: %w", submissionId, ctx.Err())
+			
+		default:
+			if err := stream.SetWriteDeadline(time.Now().Add(config.SettingsObj.StreamWriteTimeout)); err != nil {
+				log.Warnf("⚠️ Failed to set write deadline for submission %s: %v", submissionId, err)
+				continue
+			}
+
+			n, err := stream.Write(data)
+			if err != nil {
+				log.Errorf("❌ Write attempt %d/%d failed for submission %s: %v", 
+					i+1, maxRetries, submissionId, err)
+				continue
+			}
+			if n != len(data) {
+				log.Errorf("❌ Incomplete write for submission %s: %d/%d bytes", 
+					submissionId, n, len(data))
+				continue
+			}
+			
+			success = true
+			return nil
+		}
 	}
 
-	return fmt.Errorf("failed after %d attempts, last error: %v", maxRetries, lastErr)
+	return fmt.Errorf("failed to write submission %s after %d attempts (Project: %s, Epoch: %d)",
+		submissionId, maxRetries, submission.Request.ProjectId, submission.Request.EpochId)
 }
