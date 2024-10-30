@@ -9,7 +9,6 @@ import (
 	"proto-snapshot-server/pkgs"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
@@ -43,9 +42,7 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 }
 
 func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSubmission) (*pkgs.SubmissionResponse, error) {
-	if err := s.limiter.Wait(ctx); err != nil {
-		return nil, err
-	}
+	log.Debugln("Received submission with request: ", submission.Request)
 
 	submissionId := uuid.New()
 	submissionIdBytes, err := submissionId.MarshalText()
@@ -59,44 +56,19 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 		log.Errorln("Could not marshal submission: ", err.Error())
 		return &pkgs.SubmissionResponse{Message: "Failure"}, err
 	}
+	log.Debugln("Sending submission with ID: ", submissionId.String())
 
 	submissionBytes := append(submissionIdBytes, subBytes...)
-	if config.SettingsObj.DataMarketInRequest {
-		// Convert to checksum address using go-ethereum's utility
-		checksummedAddress := common.HexToAddress(config.SettingsObj.DataMarketAddress).Hex()
-		submissionBytes = append([]byte(checksummedAddress), submissionBytes...)
-	}
 
-	// Launch goroutine but with controlled concurrency
-	select {
-	case s.writeSemaphore <- struct{}{}:
-		go func() {
-			defer func() { <-s.writeSemaphore }()
+	s.writeSemaphore <- struct{}{}
+	go func() {
+		defer func() { <-s.writeSemaphore }()
+		if err := s.writeToStream(submissionBytes, submissionId.String(), submission); err != nil {
+			log.Errorf("❌ Stream write failed for %s: %v", submissionId.String(), err)
+		}
+	}()
 
-			err := s.writeToStream(ctx, submissionBytes, submissionId.String(), submission)
-			if err != nil {
-				log.Errorf("❌ Failed to process submission %s: %v", submissionId, err)
-				return
-			}
-			log.Infof("✅ Successfully processed submission %s", submissionId)
-		}()
-	default:
-		// If we can't acquire semaphore immediately, log and continue
-		log.Warnf("High write concurrency, submission %s queued", submissionId)
-		go func() {
-			s.writeSemaphore <- struct{}{} // Will block until capacity available
-			defer func() { <-s.writeSemaphore }()
-
-			err := s.writeToStream(ctx, submissionBytes, submissionId.String(), submission)
-			if err != nil {
-				log.Errorf("❌ Failed to process submission %s: %v", submissionId, err)
-				return
-			}
-			log.Infof("✅ Successfully processed submission %s", submissionId)
-		}()
-	}
-
-	return &pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()}, nil
+	return &pkgs.SubmissionResponse{Message: "Success"}, nil
 }
 
 func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotSimulationServer) error {
@@ -121,7 +93,7 @@ func StartSubmissionServer(server pkgs.SubmissionServer) {
 	}
 }
 
-func (s *server) writeToStream(ctx context.Context, data []byte, submissionId string, submission *pkgs.SnapshotSubmission) error {
+func (s *server) writeToStream(data []byte, submissionId string, submission *pkgs.SnapshotSubmission) error {
 	pool := GetLibp2pStreamPool()
 	if pool == nil {
 		return fmt.Errorf("stream pool not available")
@@ -129,55 +101,40 @@ func (s *server) writeToStream(ctx context.Context, data []byte, submissionId st
 
 	stream, err := pool.GetStream()
 	if err != nil {
-		log.Errorf("❌ Failed to get stream for submission %s (Project: %s, Epoch: %d): %v",
-			submissionId, submission.Request.ProjectId, submission.Request.EpochId, err)
 		return fmt.Errorf("failed to get stream: %w", err)
 	}
 
 	success := false
 	defer func() {
 		if !success {
-			log.Errorf("❌ Failed to process submission %s (Project: %s, Epoch: %d)",
-				submissionId, submission.Request.ProjectId, submission.Request.EpochId)
+			log.Errorf("❌ Failed defer for submission (Project: %s, Epoch: %d) with ID: %s: %v",
+				submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
 			stream.Reset()
 			stream.Close()
 		} else {
-			log.Infof("✅ Successfully processed submission %s (Project: %s, Epoch: %d)",
-				submissionId, submission.Request.ProjectId, submission.Request.EpochId)
+			log.Infof("⏰ Succesful defer for submission (Project: %s, Epoch: %d) with ID: %s",
+				submission.Request.ProjectId, submission.Request.EpochId, submissionId)
 		}
-		// Always return to pool - let pool's health check handle cleanup
 		pool.ReturnStream(stream)
 	}()
 
-	maxRetries := config.SettingsObj.MaxWriteRetries
-	for i := 0; i < maxRetries; i++ {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("operation cancelled for submission %s: %w", submissionId, ctx.Err())
-			
-		default:
-			if err := stream.SetWriteDeadline(time.Now().Add(config.SettingsObj.StreamWriteTimeout)); err != nil {
-				log.Warnf("⚠️ Failed to set write deadline for submission %s: %v", submissionId, err)
-				continue
-			}
-
-			n, err := stream.Write(data)
-			if err != nil {
-				log.Errorf("❌ Write attempt %d/%d failed for submission %s: %v", 
-					i+1, maxRetries, submissionId, err)
-				continue
-			}
-			if n != len(data) {
-				log.Errorf("❌ Incomplete write for submission %s: %d/%d bytes", 
-					submissionId, n, len(data))
-				continue
-			}
-			
-			success = true
-			return nil
-		}
+	if err := stream.SetWriteDeadline(time.Now().Add(config.SettingsObj.StreamWriteTimeout)); err != nil {
+		return fmt.Errorf("❌ Failed to set write deadline for submission (Project: %s, Epoch: %d) with ID: %s: %w",
+			submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
 	}
 
-	return fmt.Errorf("failed to write submission %s after %d attempts (Project: %s, Epoch: %d)",
-		submissionId, maxRetries, submission.Request.ProjectId, submission.Request.EpochId)
+	n, err := stream.Write(data)
+	if err != nil {
+		return fmt.Errorf("❌ Write failed for submission (Project: %s, Epoch: %d) with ID: %s: %w",
+			submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
+	}
+	if n != len(data) {
+		return fmt.Errorf("❌ Incomplete write: %d/%d bytes for submission (Project: %s, Epoch: %d) with ID: %s",
+			n, len(data), submission.Request.ProjectId, submission.Request.EpochId, submissionId)
+	}
+
+	success = true
+	log.Infof("✅ Successfully wrote to stream for submission (Project: %s, Epoch: %d) with ID: %s",
+		submission.Request.ProjectId, submission.Request.EpochId, submissionId)
+	return nil
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"proto-snapshot-server/config"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -26,11 +25,6 @@ type StreamPool struct {
 	streams     []network.Stream
 	maxSize     int
 	sequencerID peer.ID
-	metrics     struct {
-		activeStreams int
-		failedWrites  int64
-		successWrites int64
-	}
 }
 
 // createStream is now a method of StreamPool
@@ -97,49 +91,59 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	hostConn, seqId, _ := GetSequencerConnection()
-	if hostConn == nil || seqId.String() == "" {
-		return nil, fmt.Errorf("invalid connection state")
-	}
+	// Keep trying until we get a stream or hit an error
+	for {
+		// Check if we have a usable stream
+		if len(p.streams) > 0 {
+			stream := p.streams[len(p.streams)-1]
+			p.streams = p.streams[:len(p.streams)-1]
 
-	// Check if we have a usable stream
-	if len(p.streams) > 0 {
-		stream := p.streams[len(p.streams)-1]
-		p.streams = p.streams[:len(p.streams)-1]
-
-		// Verify stream is on current connection
-		if stream.Conn().ID() == hostConn.ID().String() {
-			if err := p.pingStream(stream); err == nil {
-				return stream, nil
+			// Verify stream is on current connection
+			if stream.Conn().ID() == SequencerHostConn.ID().String() {
+				if err := p.pingStream(stream); err == nil {
+					return stream, nil
+				}
 			}
+			// Stream is from old connection or unhealthy
+			stream.Close()
 		}
-		// Stream is from old connection or unhealthy
-		stream.Close()
-	}
 
-	return p.createNewStreamWithRetry()
+		// If pool is empty, wait and retry
+		if len(p.streams) == 0 {
+			p.mu.Unlock()                      // Release lock while waiting
+			time.Sleep(100 * time.Millisecond) // Wait before retry
+			p.mu.Lock()                        // Reacquire lock
+			continue
+		}
+
+		// If we get here, try to create a new stream
+		stream, err := p.createNewStreamWithRetry()
+		if err != nil {
+			return nil, err
+		}
+		return stream, nil
+	}
 }
 
 func (p *StreamPool) ReturnStream(stream network.Stream) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Basic health check before returning to pool
-	if err := p.pingStream(stream); err != nil {
-		log.Debug("Stream failed health check on return, closing")
+	// Don't exceed pool size
+	if len(p.streams) >= p.maxSize {
 		stream.Close()
-		p.metrics.activeStreams--
 		return
 	}
 
-	if len(p.streams) < p.maxSize {
-		p.streams = append(p.streams, stream)
-	} else {
-		log.Debug("Pool at capacity, closing stream")
+	// Optional: verify stream is still healthy before returning
+	if err := p.pingStream(stream); err != nil {
+		log.Debug("Stream failed health check on return, closing")
 		stream.Close()
+		return
 	}
-	p.metrics.activeStreams--
-	atomic.AddInt64(&p.metrics.successWrites, 1)
+
+	p.streams = append(p.streams, stream)
+	// Note: don't decrease activeCount here as stream is still in pool
 }
 
 func (p *StreamPool) pingStream(stream network.Stream) error {
