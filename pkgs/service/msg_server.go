@@ -58,7 +58,11 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	}
 	log.Debugln("Sending submission with ID: ", submissionId.String())
 
-	submissionBytes := append(submissionIdBytes, subBytes...)
+	submissionBytes := submissionIdBytes
+	if config.SettingsObj.DataMarketInRequest {
+		submissionBytes = append(submissionBytes, []byte(config.SettingsObj.DataMarketAddress)...)
+	}
+	submissionBytes = append(submissionBytes, subBytes...)
 
 	s.writeSemaphore <- struct{}{}
 	go func() {
