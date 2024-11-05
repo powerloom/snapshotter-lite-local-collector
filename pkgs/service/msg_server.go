@@ -76,6 +76,10 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	}
 	submissionBytes = append(submissionBytes, subBytes...)
 
+	// Track received submission for this epoch
+	metrics := s.getOrCreateEpochMetrics(submission.Request.EpochId)
+	metrics.received.Add(1)
+
 	s.writeSemaphore <- struct{}{}
 	go func() {
 		defer func() { <-s.writeSemaphore }()
@@ -130,6 +134,10 @@ func (s *server) writeToStream(data []byte, submissionId string, submission *pkg
 		} else {
 			log.Infof("⏰ Succesful defer for submission (Project: %s, Epoch: %d) with ID: %s",
 				submission.Request.ProjectId, submission.Request.EpochId, submissionId)
+			// Get metrics and increment success counter
+			if metrics := s.getOrCreateEpochMetrics(submission.Request.EpochId); metrics != nil {
+				metrics.succeeded.Add(1)
+			}
 		}
 		pool.ReturnStream(stream)
 	}()
