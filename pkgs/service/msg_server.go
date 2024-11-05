@@ -168,7 +168,17 @@ func (s *server) getOrCreateEpochMetrics(epochID uint64) *epochMetrics {
 	s.currentEpoch.Store(epochID)
 
 	// Get or create metrics for this epoch
-	metrics, _ := s.metrics.LoadOrStore(epochID, &epochMetrics{})
+	metrics, loaded := s.metrics.LoadOrStore(epochID, &epochMetrics{
+		received:  atomic.Uint64{},
+		succeeded: atomic.Uint64{},
+	})
+	
+	// Initialize the counters to 0 only if this is a new metrics object
+	if !loaded {
+		em := metrics.(*epochMetrics)
+		em.received.Store(0)
+		em.succeeded.Store(0)
+	}
 
 	// Cleanup old epochs
 	s.metrics.Range(func(key, value interface{}) bool {
@@ -179,7 +189,7 @@ func (s *server) getOrCreateEpochMetrics(epochID uint64) *epochMetrics {
 		return true
 	})
 
-	return metrics.(*epochMetrics)
+	return em
 }
 
 func (s *server) GetMetrics() map[uint64]struct {
