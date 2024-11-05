@@ -47,8 +47,8 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 		metrics:        &sync.Map{},
 	}
 
-	// Start periodic metrics logging
-	go s.logMetricsPeriodically(time.Minute)
+	// Start periodic metrics logging with 15 second interval
+	go s.logMetricsPeriodically(15 * time.Second)
 
 	return s
 }
