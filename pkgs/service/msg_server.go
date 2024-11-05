@@ -16,11 +16,17 @@ import (
 	"google.golang.org/grpc"
 )
 
+// epochMetrics tracks submission statistics for a specific epoch
+type epochMetrics struct {
+	received  atomic.Uint64
+	succeeded atomic.Uint64
+}
+
 // server is used to implement submission.SubmissionService.
 type server struct {
 	pkgs.UnimplementedSubmissionServer
 	writeSemaphore chan struct{} // Control concurrent writes
-	metrics        *sync.Map    // map[uint64]*epochMetrics
+	metrics        *sync.Map     // map[uint64]*epochMetrics
 	currentEpoch   atomic.Uint64
 }
 
@@ -152,10 +158,10 @@ func (s *server) writeToStream(data []byte, submissionId string, submission *pkg
 func (s *server) getOrCreateEpochMetrics(epochID uint64) *epochMetrics {
 	// Store current epoch
 	s.currentEpoch.Store(epochID)
-	
+
 	// Get or create metrics for this epoch
 	metrics, _ := s.metrics.LoadOrStore(epochID, &epochMetrics{})
-	
+
 	// Cleanup old epochs
 	s.metrics.Range(func(key, value interface{}) bool {
 		epoch := key.(uint64)
@@ -164,7 +170,7 @@ func (s *server) getOrCreateEpochMetrics(epochID uint64) *epochMetrics {
 		}
 		return true
 	})
-	
+
 	return metrics.(*epochMetrics)
 }
 
@@ -176,7 +182,7 @@ func (s *server) GetMetrics() map[uint64]struct {
 		Received  uint64
 		Succeeded uint64
 	})
-	
+
 	s.metrics.Range(func(key, value interface{}) bool {
 		epochID := key.(uint64)
 		metrics := value.(*epochMetrics)
@@ -189,7 +195,7 @@ func (s *server) GetMetrics() map[uint64]struct {
 		}
 		return true
 	})
-	
+
 	return result
 }
 
@@ -200,7 +206,7 @@ func (s *server) logMetricsPeriodically(interval time.Duration) {
 	for range ticker.C {
 		currentEpoch := s.currentEpoch.Load()
 		metrics := s.GetMetrics()
-		
+
 		log.WithFields(log.Fields{
 			"current_epoch": currentEpoch,
 			"metrics":       metrics,
@@ -212,7 +218,7 @@ func (s *server) logMetricsPeriodically(interval time.Duration) {
 			if m.Received > 0 {
 				successRate = float64(m.Succeeded) / float64(m.Received) * 100
 			}
-			
+
 			log.WithFields(log.Fields{
 				"epoch_id":     epochID,
 				"received":     m.Received,
