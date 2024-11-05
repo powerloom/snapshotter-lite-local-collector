@@ -7,19 +7,21 @@ import (
 	"net"
 	"proto-snapshot-server/config"
 	"proto-snapshot-server/pkgs"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 )
 
 // server is used to implement submission.SubmissionService.
 type server struct {
 	pkgs.UnimplementedSubmissionServer
-	limiter        *rate.Limiter
 	writeSemaphore chan struct{} // Control concurrent writes
+	metrics        *sync.Map    // map[uint64]*epochMetrics
+	currentEpoch   atomic.Uint64
 }
 
 var _ pkgs.SubmissionServer = &server{}
@@ -35,9 +37,13 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 	deps.mu.RUnlock()
 
 	s := &server{
-		limiter:        rate.NewLimiter(rate.Limit(300), 50),
 		writeSemaphore: make(chan struct{}, config.SettingsObj.MaxConcurrentWrites),
+		metrics:        &sync.Map{},
 	}
+
+	// Start periodic metrics logging
+	go s.logMetricsPeriodically(time.Minute)
+
 	return s
 }
 
@@ -141,4 +147,78 @@ func (s *server) writeToStream(data []byte, submissionId string, submission *pkg
 	log.Infof("✅ Successfully wrote to stream for submission (Project: %s, Epoch: %d) with ID: %s",
 		submission.Request.ProjectId, submission.Request.EpochId, submissionId)
 	return nil
+}
+
+func (s *server) getOrCreateEpochMetrics(epochID uint64) *epochMetrics {
+	// Store current epoch
+	s.currentEpoch.Store(epochID)
+	
+	// Get or create metrics for this epoch
+	metrics, _ := s.metrics.LoadOrStore(epochID, &epochMetrics{})
+	
+	// Cleanup old epochs
+	s.metrics.Range(func(key, value interface{}) bool {
+		epoch := key.(uint64)
+		if epochID-epoch > 3 {
+			s.metrics.Delete(epoch)
+		}
+		return true
+	})
+	
+	return metrics.(*epochMetrics)
+}
+
+func (s *server) GetMetrics() map[uint64]struct {
+	Received  uint64
+	Succeeded uint64
+} {
+	result := make(map[uint64]struct {
+		Received  uint64
+		Succeeded uint64
+	})
+	
+	s.metrics.Range(func(key, value interface{}) bool {
+		epochID := key.(uint64)
+		metrics := value.(*epochMetrics)
+		result[epochID] = struct {
+			Received  uint64
+			Succeeded uint64
+		}{
+			Received:  metrics.received.Load(),
+			Succeeded: metrics.succeeded.Load(),
+		}
+		return true
+	})
+	
+	return result
+}
+
+func (s *server) logMetricsPeriodically(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		currentEpoch := s.currentEpoch.Load()
+		metrics := s.GetMetrics()
+		
+		log.WithFields(log.Fields{
+			"current_epoch": currentEpoch,
+			"metrics":       metrics,
+		}).Info("📊 Periodic metrics report")
+
+		// Detailed per-epoch logging
+		for epochID, m := range metrics {
+			successRate := float64(0)
+			if m.Received > 0 {
+				successRate = float64(m.Succeeded) / float64(m.Received) * 100
+			}
+			
+			log.WithFields(log.Fields{
+				"epoch_id":     epochID,
+				"received":     m.Received,
+				"succeeded":    m.Succeeded,
+				"success_rate": fmt.Sprintf("%.2f%%", successRate),
+			}).Info("📈 Epoch metrics")
+		}
+	}
 }
