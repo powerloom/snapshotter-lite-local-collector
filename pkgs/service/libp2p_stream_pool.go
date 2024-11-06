@@ -131,18 +131,20 @@ func (p *StreamPool) ReturnStream(stream network.Stream) {
 
 	// Don't exceed pool size
 	if len(p.streams) >= p.maxSize {
+		log.Debugf("Stream pool is full, closing stream: %v", stream.ID())
 		stream.Close()
 		return
 	}
 
 	// Optional: verify stream is still healthy before returning
 	if err := p.pingStream(stream); err != nil {
-		log.Debug("Stream failed health check on return, closing")
+		log.Debugf("Stream failed health check on return, closing: %v", stream.ID())
 		stream.Close()
 		return
 	}
 
 	p.streams = append(p.streams, stream)
+	log.Debugf("Stream returned to pool: %v", stream.ID())
 	// Note: don't decrease activeCount here as stream is still in pool
 }
 
