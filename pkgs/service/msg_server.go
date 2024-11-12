@@ -4,164 +4,91 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"proto-snapshot-server/config"
 	"proto-snapshot-server/pkgs"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
-	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
 
+// epochMetrics tracks submission statistics for a specific epoch
+type epochMetrics struct {
+	received  atomic.Uint64
+	succeeded atomic.Uint64
+}
+
 // server is used to implement submission.SubmissionService.
 type server struct {
 	pkgs.UnimplementedSubmissionServer
-	streamPool *streamPool
+	writeSemaphore chan struct{} // Control concurrent writes
+	metrics        *sync.Map     // map[uint64]*epochMetrics
+	currentEpoch   atomic.Uint64
 }
 
 var _ pkgs.SubmissionServer = &server{}
-var mu sync.Mutex
 
 // NewMsgServerImpl returns an implementation of the SubmissionService interface
 // for the provided Keeper.
-func NewMsgServerImpl() pkgs.SubmissionServer {
-	var sequencerAddr ma.Multiaddr
-	var err error
-
-	sequencer, err := fetchSequencer("https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/sequencers.json", config.SettingsObj.DataMarketAddress)
-	if err != nil {
-		log.Debugln(err.Error())
-		return nil
+func NewMsgServerImplV2() pkgs.SubmissionServer {
+	deps.mu.RLock()
+	if !deps.initialized {
+		deps.mu.RUnlock()
+		log.Fatal("Cannot create server: service not initialized")
 	}
-	sequencerAddr, err = ma.NewMultiaddr(sequencer.Maddr)
-	if err != nil {
-		log.Debugln(err.Error())
-		return nil
+	deps.mu.RUnlock()
+
+	s := &server{
+		writeSemaphore: make(chan struct{}, config.SettingsObj.MaxConcurrentWrites),
+		metrics:        &sync.Map{},
 	}
 
-	sequencerInfo, err := peer.AddrInfoFromP2pAddr(sequencerAddr)
+	// Start periodic metrics logging with 15 second interval
+	go s.logMetricsPeriodically(15 * time.Second)
 
-	if err != nil {
-		log.Errorln("Error converting MultiAddr to AddrInfo: ", err.Error())
-		return nil
-	}
-
-	sequencerID := sequencerInfo.ID
-
-	if err := rpctorelay.Connect(context.Background(), *sequencerInfo); err != nil {
-		log.Debugln("Failed to connect to the Sequencer:", err)
-	} else {
-		log.Debugln("Successfully connected to the Sequencer: ", sequencerAddr.String())
-	}
-
-	createStream := func() (network.Stream, error) {
-		var stream network.Stream
-		var err error
-
-		operation := func() error {
-			stream, err = rpctorelay.NewStream(
-				network.WithUseTransient(context.Background(), "collect"),
-				sequencerID,
-				"/collect",
-			)
-			return err
-		}
-
-		backoffStrategy := backoff.NewExponentialBackOff()
-		backoffStrategy.MaxElapsedTime = 30 * time.Second // Adjust as needed
-
-		err = backoff.Retry(operation, backoffStrategy)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create stream after retries: %w", err)
-		}
-
-		return stream, nil
-	}
-	return &server{
-		streamPool: newStreamPool(config.SettingsObj.MaxStreamPoolSize, sequencerID, createStream),
-	}
+	return s
 }
 
-func (s *server) writeToStream(data []byte) error {
-	for attempt := 0; attempt < 3; attempt++ {
-		stream, err := s.streamPool.GetStream()
-		if err != nil {
-			log.Warnf("Failed to get stream (attempt %d): %v", attempt+1, err)
-			time.Sleep(time.Second * time.Duration(attempt+1))
-			continue
-		}
+func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSubmission) (*pkgs.SubmissionResponse, error) {
+	log.Debugln("Received submission with request: ", submission.Request)
 
-		_, err = stream.Write(data)
-		if err == nil {
-			s.streamPool.ReturnStream(stream)
-			return nil // Success
-		}
-
-		log.Warnf("Failed to write to stream (attempt %d): %v", attempt+1, err)
-		stream.Reset() // Reset the stream instead of returning it to the pool
-		time.Sleep(time.Second * time.Duration(attempt+1))
+	submissionId := uuid.New()
+	submissionIdBytes, err := submissionId.MarshalText()
+	if err != nil {
+		log.Errorln("Error marshalling submissionId: ", err.Error())
+		return &pkgs.SubmissionResponse{Message: "Failure"}, err
 	}
 
-	return fmt.Errorf("failed to write to stream after 3 attempts")
-}
-
-func (s *server) SubmitSnapshot(stream pkgs.Submission_SubmitSnapshotServer) error {
-	log.Debugln("SubmitSnapshot called")
-
-	for {
-		submission, err := stream.Recv()
-		if err != nil {
-			switch {
-			case err == io.EOF:
-				log.Debugln("EOF reached")
-			case strings.Contains(err.Error(), "context canceled"):
-				log.Errorln("Stream ended by client: ")
-			default:
-				log.Errorln("Unexpected stream error: ", err.Error())
-				return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
-			}
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Success"})
-		}
-
-		log.Debugln("Received submission with request: ", submission.Request)
-
-		submissionId := uuid.New()
-		submissionIdBytes, err := submissionId.MarshalText()
-		if err != nil {
-			log.Errorln("Error marshalling submissionId: ", err.Error())
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
-		}
-
-		subBytes, err := json.Marshal(submission)
-		if err != nil {
-			log.Errorln("Could not marshal submission: ", err.Error())
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure"})
-		}
-		log.Debugln("Sending submission with ID: ", submissionId.String())
-
-		submissionBytes := append(submissionIdBytes, subBytes...)
-
-		err = s.writeToStream(submissionBytes)
-		if err != nil {
-			log.Errorln("Failed to write to stream: ", err.Error())
-			return stream.Send(&pkgs.SubmissionResponse{Message: "Failure: " + submissionId.String()})
-		}
-		log.Debugln("Stream write successful for ID: ", submissionId.String(), "for Epoch:", submission.Request.EpochId, "Slot:", submission.Request.SlotId)
-		if submission.Request.EpochId == 0 {
-			log.Debugln("✅ Simulation snapshot submitted successfully to sequencer:", submissionId.String())
-		} else {
-			log.Debugln("✅ Snapshot submitted successfully to sequencer: ", submissionId.String())
-		}
-		return stream.Send(&pkgs.SubmissionResponse{Message: "Success: " + submissionId.String()})
+	subBytes, err := json.Marshal(submission)
+	if err != nil {
+		log.Errorln("Could not marshal submission: ", err.Error())
+		return &pkgs.SubmissionResponse{Message: "Failure"}, err
 	}
+	log.Debugln("Sending submission with ID: ", submissionId.String())
+
+	submissionBytes := submissionIdBytes
+	if config.SettingsObj.DataMarketInRequest {
+		submissionBytes = append(submissionBytes, []byte(config.SettingsObj.DataMarketAddress)...)
+	}
+	submissionBytes = append(submissionBytes, subBytes...)
+
+	// Track received submission for this epoch
+	metrics := s.getOrCreateEpochMetrics(submission.Request.EpochId)
+	metrics.received.Add(1)
+
+	s.writeSemaphore <- struct{}{}
+	go func() {
+		defer func() { <-s.writeSemaphore }()
+		if err := s.writeToStream(submissionBytes, submissionId.String(), submission); err != nil {
+			log.Errorf("❌ Stream write failed for %s: %v", submissionId.String(), err)
+		}
+	}()
+
+	return &pkgs.SubmissionResponse{Message: "Success"}, nil
 }
 
 func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotSimulationServer) error {
@@ -173,16 +100,145 @@ func (s *server) mustEmbedUnimplementedSubmissionServer() {
 
 func StartSubmissionServer(server pkgs.SubmissionServer) {
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", config.SettingsObj.PortNumber))
-
 	if err != nil {
-		log.Debugf("failed to listen: %v", err)
+		log.Fatalf("failed to listen: %v", err)
 	}
 
 	s := grpc.NewServer()
 	pkgs.RegisterSubmissionServer(s, server)
-	log.Debugln("Server listening at", lis.Addr())
+	log.Printf("Server listening at %v", lis.Addr())
 
 	if err := s.Serve(lis); err != nil {
-		log.Debugf("failed to serve: %v", err)
+		log.Fatalf("failed to serve: %v", err)
+	}
+}
+
+func (s *server) writeToStream(data []byte, submissionId string, submission *pkgs.SnapshotSubmission) error {
+	pool := GetLibp2pStreamPool()
+	if pool == nil {
+		return fmt.Errorf("stream pool not available")
+	}
+
+	stream, err := pool.GetStream()
+	if err != nil {
+		return fmt.Errorf("failed to get stream: %w", err)
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			log.Errorf("❌ Failed defer for submission (Project: %s, Epoch: %d) with ID: %s: %v",
+				submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
+			stream.Reset()
+			stream.Close()
+		} else {
+			log.Infof("⏰ Succesful defer for submission (Project: %s, Epoch: %d) with ID: %s",
+				submission.Request.ProjectId, submission.Request.EpochId, submissionId)
+			// Get metrics and increment success counter
+			if metrics := s.getOrCreateEpochMetrics(submission.Request.EpochId); metrics != nil {
+				metrics.succeeded.Add(1)
+			}
+		}
+		pool.ReturnStream(stream)
+	}()
+
+	if err := stream.SetWriteDeadline(time.Now().Add(config.SettingsObj.StreamWriteTimeout)); err != nil {
+		return fmt.Errorf("❌ Failed to set write deadline for submission (Project: %s, Epoch: %d) with ID: %s: %w",
+			submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
+	}
+
+	n, err := stream.Write(data)
+	if err != nil {
+		return fmt.Errorf("❌ Write failed for submission (Project: %s, Epoch: %d) with ID: %s: %w",
+			submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
+	}
+	if n != len(data) {
+		return fmt.Errorf("❌ Incomplete write: %d/%d bytes for submission (Project: %s, Epoch: %d) with ID: %s",
+			n, len(data), submission.Request.ProjectId, submission.Request.EpochId, submissionId)
+	}
+
+	success = true
+	log.Infof("✅ Successfully wrote to stream for submission (Project: %s, Epoch: %d) with ID: %s",
+		submission.Request.ProjectId, submission.Request.EpochId, submissionId)
+	return nil
+}
+
+func (s *server) getOrCreateEpochMetrics(epochID uint64) *epochMetrics {
+	// Store current epoch
+	s.currentEpoch.Store(epochID)
+
+	// Get or create metrics for this epoch
+	metricsValue, _ := s.metrics.LoadOrStore(epochID, &epochMetrics{
+		received:  atomic.Uint64{},
+		succeeded: atomic.Uint64{},
+	})
+	
+	// Type assert and return the metrics object
+	metrics := metricsValue.(*epochMetrics)
+
+	// Cleanup old epochs
+	s.metrics.Range(func(key, value interface{}) bool {
+		epoch := key.(uint64)
+		if epochID-epoch > 3 {
+			s.metrics.Delete(epoch)
+		}
+		return true
+	})
+
+	return metrics
+}
+
+func (s *server) GetMetrics() map[uint64]struct {
+	Received  uint64
+	Succeeded uint64
+} {
+	result := make(map[uint64]struct {
+		Received  uint64
+		Succeeded uint64
+	})
+
+	s.metrics.Range(func(key, value interface{}) bool {
+		epochID := key.(uint64)
+		metrics := value.(*epochMetrics)
+		result[epochID] = struct {
+			Received  uint64
+			Succeeded uint64
+		}{
+			Received:  metrics.received.Load(),
+			Succeeded: metrics.succeeded.Load(),
+		}
+		return true
+	})
+
+	return result
+}
+
+func (s *server) logMetricsPeriodically(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		currentEpoch := s.currentEpoch.Load()
+		metrics := s.GetMetrics()
+
+		log.WithFields(log.Fields{
+			"current_epoch": currentEpoch,
+			"metrics":       metrics,
+		}).Info("📊 Periodic metrics report")
+
+		// Detailed per-epoch logging
+		for epochID, m := range metrics {
+			successRate := float64(0)
+			if m.Received > 0 {
+				successRate = float64(m.Succeeded) / float64(m.Received) * 100
+			}
+
+			log.WithFields(log.Fields{
+				"epoch_id":     epochID,
+				"received":     m.Received,
+				"succeeded":    m.Succeeded,
+				"success_rate": fmt.Sprintf("%.2f%%", successRate),
+			}).Info("📈 Epoch metrics")
+		}
 	}
 }

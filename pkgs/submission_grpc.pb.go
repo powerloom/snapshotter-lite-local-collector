@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v5.28.2
-// source: submission.proto
+// source: pkgs/proto/submission.proto
 
 package pkgs
 
@@ -28,7 +28,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type SubmissionClient interface {
 	SubmitSnapshotSimulation(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[SnapshotSubmission, SubmissionResponse], error)
-	SubmitSnapshot(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SnapshotSubmission, SubmissionResponse], error)
+	SubmitSnapshot(ctx context.Context, in *SnapshotSubmission, opts ...grpc.CallOption) (*SubmissionResponse, error)
 }
 
 type submissionClient struct {
@@ -52,25 +52,22 @@ func (c *submissionClient) SubmitSnapshotSimulation(ctx context.Context, opts ..
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Submission_SubmitSnapshotSimulationClient = grpc.ClientStreamingClient[SnapshotSubmission, SubmissionResponse]
 
-func (c *submissionClient) SubmitSnapshot(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SnapshotSubmission, SubmissionResponse], error) {
+func (c *submissionClient) SubmitSnapshot(ctx context.Context, in *SnapshotSubmission, opts ...grpc.CallOption) (*SubmissionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Submission_ServiceDesc.Streams[1], Submission_SubmitSnapshot_FullMethodName, cOpts...)
+	out := new(SubmissionResponse)
+	err := c.cc.Invoke(ctx, Submission_SubmitSnapshot_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[SnapshotSubmission, SubmissionResponse]{ClientStream: stream}
-	return x, nil
+	return out, nil
 }
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Submission_SubmitSnapshotClient = grpc.BidiStreamingClient[SnapshotSubmission, SubmissionResponse]
 
 // SubmissionServer is the server API for Submission service.
 // All implementations must embed UnimplementedSubmissionServer
 // for forward compatibility.
 type SubmissionServer interface {
 	SubmitSnapshotSimulation(grpc.ClientStreamingServer[SnapshotSubmission, SubmissionResponse]) error
-	SubmitSnapshot(grpc.BidiStreamingServer[SnapshotSubmission, SubmissionResponse]) error
+	SubmitSnapshot(context.Context, *SnapshotSubmission) (*SubmissionResponse, error)
 	mustEmbedUnimplementedSubmissionServer()
 }
 
@@ -84,8 +81,8 @@ type UnimplementedSubmissionServer struct{}
 func (UnimplementedSubmissionServer) SubmitSnapshotSimulation(grpc.ClientStreamingServer[SnapshotSubmission, SubmissionResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method SubmitSnapshotSimulation not implemented")
 }
-func (UnimplementedSubmissionServer) SubmitSnapshot(grpc.BidiStreamingServer[SnapshotSubmission, SubmissionResponse]) error {
-	return status.Errorf(codes.Unimplemented, "method SubmitSnapshot not implemented")
+func (UnimplementedSubmissionServer) SubmitSnapshot(context.Context, *SnapshotSubmission) (*SubmissionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SubmitSnapshot not implemented")
 }
 func (UnimplementedSubmissionServer) mustEmbedUnimplementedSubmissionServer() {}
 func (UnimplementedSubmissionServer) testEmbeddedByValue()                    {}
@@ -115,12 +112,23 @@ func _Submission_SubmitSnapshotSimulation_Handler(srv interface{}, stream grpc.S
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Submission_SubmitSnapshotSimulationServer = grpc.ClientStreamingServer[SnapshotSubmission, SubmissionResponse]
 
-func _Submission_SubmitSnapshot_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(SubmissionServer).SubmitSnapshot(&grpc.GenericServerStream[SnapshotSubmission, SubmissionResponse]{ServerStream: stream})
+func _Submission_SubmitSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SnapshotSubmission)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SubmissionServer).SubmitSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Submission_SubmitSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SubmissionServer).SubmitSnapshot(ctx, req.(*SnapshotSubmission))
+	}
+	return interceptor(ctx, in, info, handler)
 }
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Submission_SubmitSnapshotServer = grpc.BidiStreamingServer[SnapshotSubmission, SubmissionResponse]
 
 // Submission_ServiceDesc is the grpc.ServiceDesc for Submission service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -128,19 +136,18 @@ type Submission_SubmitSnapshotServer = grpc.BidiStreamingServer[SnapshotSubmissi
 var Submission_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "submission.Submission",
 	HandlerType: (*SubmissionServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SubmitSnapshot",
+			Handler:    _Submission_SubmitSnapshot_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "SubmitSnapshotSimulation",
 			Handler:       _Submission_SubmitSnapshotSimulation_Handler,
 			ClientStreams: true,
 		},
-		{
-			StreamName:    "SubmitSnapshot",
-			Handler:       _Submission_SubmitSnapshot_Handler,
-			ServerStreams: true,
-			ClientStreams: true,
-		},
 	},
-	Metadata: "submission.proto",
+	Metadata: "pkgs/proto/submission.proto",
 }

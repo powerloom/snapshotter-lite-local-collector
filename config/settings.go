@@ -1,9 +1,9 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
-	"strings"
+	"strconv"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -11,49 +11,86 @@ import (
 var SettingsObj *Settings
 
 type Settings struct {
-	SequencerId            string `json:"SequencerId"`
-	RelayerRendezvousPoint string `json:"RelayerRendezvousPoint"`
-	ClientRendezvousPoint  string `json:"ClientRendezvousPoint"`
-	RelayerPrivateKey      string `json:"RelayerPrivateKey"`
-	PowerloomReportingUrl  string `json:"PowerloomReportingUrl"`
-	SignerAccountAddress   string `json:"SignerAccountAddress"`
-	PortNumber             string `json:"LocalCollectorPort"`
-	TrustedRelayersListUrl string `json:"TrustedRelayersListUrl"`
-	DataMarketAddress      string `json:"DataMarketAddress"`
-	MaxStreamPoolSize             int `json:"MaxStreamPoolSize"`
-	StreamPoolHealthCheckInterval int `json:"StreamPoolHealthCheckInterval"`
+	SequencerId            string
+	RelayerRendezvousPoint string
+	ClientRendezvousPoint  string
+	RelayerPrivateKey      string
+	PowerloomReportingUrl  string
+	SignerAccountAddress   string
+	PortNumber             string
+	TrustedRelayersListUrl string
+	DataMarketAddress      string
+	MaxStreamPoolSize      int
+	DataMarketInRequest    bool
+
+	// Stream Pool Configuration
+	StreamHealthCheckTimeout time.Duration
+	StreamWriteTimeout       time.Duration
+	MaxWriteRetries          int
+	MaxConcurrentWrites      int
 }
 
 func LoadConfig() {
-	file, err := os.Open(strings.TrimSuffix(os.Getenv("CONFIG_PATH"), "/") + "/config/settings.json")
-	if err != nil {
-		log.Fatalf("Failed to open config file: %v", err)
-	}
-	defer func(file *os.File) {
-		err = file.Close()
-		if err != nil {
-			log.Errorf("Unable to close file: %s", err.Error())
-		}
-	}(file)
-
-	decoder := json.NewDecoder(file)
 	config := Settings{}
-	err = decoder.Decode(&config)
-	if err != nil {
-		log.Fatalf("Failed to decode config file: %v", err)
+
+	// Required fields
+	if port := os.Getenv("LOCAL_COLLECTOR_PORT"); port != "" {
+		config.PortNumber = port
+	} else {
+		config.PortNumber = "50051" // Default value
 	}
 
-	if config.TrustedRelayersListUrl == "" {
-		config.TrustedRelayersListUrl = "https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/relayers.json"
+	if contract := os.Getenv("DATA_MARKET_CONTRACT"); contract == "" {
+		log.Fatal("DATA_MARKET_CONTRACT environment variable is required")
+	} else {
+		config.DataMarketAddress = contract
 	}
+	if value := os.Getenv("DATA_MARKET_IN_REQUEST"); value == "true" {
+		config.DataMarketInRequest = true
+	} else {
+		config.DataMarketInRequest = false
+	}
+	// Optional fields with defaults
+	config.PowerloomReportingUrl = os.Getenv("POWERLOOM_REPORTING_URL")
+	config.SignerAccountAddress = os.Getenv("SIGNER_ACCOUNT_ADDRESS")
+	config.TrustedRelayersListUrl = getEnvWithDefault("TRUSTED_RELAYERS_LIST_URL",
+		"https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/relayers.json")
 
-	// Set default values for new fields if not specified in the config file
-	if config.MaxStreamPoolSize == 0 {
-		config.MaxStreamPoolSize = 2 // Default to 2 as per your current setup
-	}
-	if config.StreamPoolHealthCheckInterval == 0 {
-		config.StreamPoolHealthCheckInterval = 30 // Default to 30 seconds
-	}
+	// Load private key from file or env
+	config.RelayerPrivateKey = loadPrivateKey()
+
+	// Numeric values with defaults
+	config.MaxStreamPoolSize = getEnvAsInt("MAX_STREAM_POOL_SIZE", 50)
+	config.StreamHealthCheckTimeout = time.Duration(getEnvAsInt("STREAM_HEALTH_CHECK_TIMEOUT_MS", 5000)) * time.Millisecond
+	config.StreamWriteTimeout = time.Duration(getEnvAsInt("STREAM_WRITE_TIMEOUT_MS", 5000)) * time.Millisecond
+	config.MaxWriteRetries = getEnvAsInt("MAX_WRITE_RETRIES", 5)
+	config.MaxConcurrentWrites = getEnvAsInt("MAX_CONCURRENT_WRITES", 1000)
 
 	SettingsObj = &config
+}
+
+func getEnvWithDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func getEnvAsInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intVal, err := strconv.Atoi(value); err == nil {
+			return intVal
+		}
+		log.Warnf("Invalid value for %s, using default: %d", key, defaultValue)
+	}
+	return defaultValue
+}
+
+func loadPrivateKey() string {
+	// Try loading from file first
+	if keyBytes, err := os.ReadFile("/keys/key.txt"); err == nil {
+		return string(keyBytes)
+	}
+	// Fall back to environment variable
+	return os.Getenv("RELAYER_PRIVATE_KEY")
 }

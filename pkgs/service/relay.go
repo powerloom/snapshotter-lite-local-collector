@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"proto-snapshot-server/config"
+	"sync"
 	"time"
 
 	circuitv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
@@ -12,8 +13,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
-	"github.com/libp2p/go-libp2p/p2p/discovery/util"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
@@ -23,11 +22,15 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var rpctorelay host.Host
-var SequencerId peer.ID
-var routingDiscovery *routing.RoutingDiscovery
-
-var activeConnections int
+var (
+	SequencerHostConn host.Host
+	SequencerId       peer.ID
+	sequencerMu       sync.RWMutex
+	ConnManager       *connmgr.BasicConnMgr
+	TcpAddr           ma.Multiaddr
+	rm                network.ResourceManager
+	activeConnections int
+)
 
 func handleConnectionEstablished(network network.Network, conn network.Conn) {
 	activeConnections++
@@ -37,81 +40,15 @@ func handleConnectionClosed(network network.Network, conn network.Conn) {
 	activeConnections--
 }
 
-func ConfigureRelayer() {
-	var err error
-	tcpAddr, _ := ma.NewMultiaddr("/ip4/0.0.0.0/tcp/9000")
-
-	connManager, _ := connmgr.NewConnManager(
-		40960,
-		81920,
-		connmgr.WithGracePeriod(5*time.Minute))
-
-	scalingLimits := rcmgr.DefaultLimits
-
-	libp2p.SetDefaultServiceLimits(&scalingLimits)
-
-	scaledDefaultLimits := scalingLimits.AutoScale()
-
-	cfg := rcmgr.PartialLimitConfig{
-		System: rcmgr.ResourceLimits{
-			Streams:         rcmgr.Unlimited,
-			StreamsOutbound: rcmgr.Unlimited,
-			StreamsInbound:  rcmgr.Unlimited,
-			Conns:           rcmgr.Unlimited,
-			ConnsInbound:    rcmgr.Unlimited,
-			ConnsOutbound:   rcmgr.Unlimited,
-			FD:              rcmgr.Unlimited,
-			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
-		},
+// Thread-safe getter for connection state
+func GetSequencerConnection() (host.Host, peer.ID, error) {
+	sequencerMu.RLock()
+	defer sequencerMu.RUnlock()
+	
+	if SequencerHostConn == nil || SequencerId.String() == "" {
+		return nil, "", fmt.Errorf("sequencer connection not established")
 	}
-
-	limits := cfg.Build(scaledDefaultLimits)
-
-	limiter := rcmgr.NewFixedLimiter(limits)
-
-	rm, err := rcmgr.NewResourceManager(limiter, rcmgr.WithMetricsDisabled())
-
-	rpctorelay, err = libp2p.New(
-		libp2p.EnableRelay(),
-		libp2p.ConnectionManager(connManager),
-		libp2p.ListenAddrs(tcpAddr),
-		libp2p.ResourceManager(rm),
-		libp2p.Security(libp2ptls.ID, libp2ptls.New),
-		libp2p.Security(noise.ID, noise.New),
-		libp2p.DefaultTransports,
-		libp2p.NATPortMap(),
-		libp2p.EnableRelayService(),
-		libp2p.EnableNATService(),
-		libp2p.EnableHolePunching(),
-		libp2p.Muxer(yamux.ID, yamux.DefaultTransport))
-
-	if err != nil {
-		log.Debugln("Error instantiating libp2p host: ", err.Error())
-		return
-	}
-
-	log.Debugln("id: ", rpctorelay.ID().String())
-	rpctorelay.Network().Notify(&network.NotifyBundle{
-		ConnectedF:    handleConnectionEstablished,
-		DisconnectedF: handleConnectionClosed,
-	})
-
-	// Set up a Kademlia DHT for the service host
-
-	kademliaDHT := ConfigureDHT(context.Background(), rpctorelay)
-
-	routingDiscovery = routing.NewRoutingDiscovery(kademliaDHT)
-
-	util.Advertise(context.Background(), routingDiscovery, config.SettingsObj.ClientRendezvousPoint)
-
-	// peerId := ConnectToPeer(context.Background(), routingDiscovery, config.SettingsObj.RelayerRendezvousPoint, rpctorelay, nil)
-	// if peerId == "" {
-	// 	ReportingInstance.SendFailureNotification(nil, "Unable to connect to relayer peers")
-	// 	return
-	// }
-	// ConnectToSequencer(peerId)
-
-	// ConnectToSequencer()
+	return SequencerHostConn, SequencerId, nil
 }
 
 func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
@@ -138,40 +75,125 @@ func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
 	return false
 }
 
-func ConnectToSequencer() {
-	//trustedRelayers := ConnectToTrustedRelayers(context.Background(), rpctorelay)
-	//isConnectedP2P := ConnectToSequencerP2P(trustedRelayers, rpctorelay)
-	//if isConnectedP2P {
-	//	log.Debugln("Successfully connected to the Sequencer: ", rpctorelay.Network().Connectedness(peer.ID(config.SettingsObj.SequencerId)), isConnectedP2P)
-	//	return
-	//} else {
-	//	log.Debugln("Failed to connect to the Sequencer")
-	//}
-
-	var sequencerAddr ma.Multiaddr
+func CreateLibP2pHost() error {
 	var err error
+	TcpAddr, _ = ma.NewMultiaddr("/ip4/0.0.0.0/tcp/9000")
 
-	sequencer, err := fetchSequencer("https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/sequencers.json", config.SettingsObj.DataMarketAddress)
-	if err != nil {
-		log.Debugln(err.Error())
+	ConnManager, _ = connmgr.NewConnManager(
+		40960,
+		81920,
+		connmgr.WithGracePeriod(1*time.Minute))
+
+	scalingLimits := rcmgr.DefaultLimits
+
+	libp2p.SetDefaultServiceLimits(&scalingLimits)
+
+	scaledDefaultLimits := scalingLimits.AutoScale()
+
+	cfg := rcmgr.PartialLimitConfig{
+		System: rcmgr.ResourceLimits{
+			StreamsOutbound: rcmgr.Unlimited,
+			StreamsInbound:  rcmgr.Unlimited,
+			Streams:         rcmgr.Unlimited,
+			Conns:           rcmgr.Unlimited,
+			ConnsOutbound:   rcmgr.Unlimited,
+			ConnsInbound:    rcmgr.Unlimited,
+			FD:              rcmgr.Unlimited,
+			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
+		},
 	}
-	sequencerAddr, err = ma.NewMultiaddr(sequencer.Maddr)
+
+	limits := cfg.Build(scaledDefaultLimits)
+
+	limiter := rcmgr.NewFixedLimiter(limits)
+
+	rm, err = rcmgr.NewResourceManager(limiter, rcmgr.WithMetricsDisabled())
+
 	if err != nil {
-		log.Debugln(err.Error())
-		return
+		log.Debugln("Error instantiating resource manager: ", err.Error())
+		return err
 	}
 
-	sequencerInfo, err := peer.AddrInfoFromP2pAddr(sequencerAddr)
+	SequencerHostConn, err = libp2p.New(
+		libp2p.EnableRelay(),
+		libp2p.ConnectionManager(ConnManager),
+		libp2p.ListenAddrs(TcpAddr),
+		libp2p.ResourceManager(rm),
+		libp2p.Security(libp2ptls.ID, libp2ptls.New),
+		libp2p.Security(noise.ID, noise.New),
+		libp2p.DefaultTransports,
+		libp2p.NATPortMap(),
+		libp2p.EnableRelayService(),
+		libp2p.EnableNATService(),
+		libp2p.EnableHolePunching(),
+		libp2p.Muxer(yamux.ID, yamux.DefaultTransport))
 
 	if err != nil {
-		log.Errorln("Error converting MultiAddr to AddrInfo: ", err.Error())
+		log.Debugln("Error instantiating libp2p host: ", err.Error())
+		return err
+	}
+	return nil
+}
+
+// EstablishSequencerConnection should only be called during initialization
+// or explicit reconnection logic, not during stream operations
+func EstablishSequencerConnection() error {
+	sequencerMu.Lock()
+	defer sequencerMu.Unlock()
+
+	// Clear existing connection if any
+	if SequencerHostConn != nil {
+		if err := SequencerHostConn.Close(); err != nil {
+			log.Warnf("Error closing existing connection: %v", err)
+		}
+		// Important: Signal that connection is being reset
+		// This should trigger cleanup of existing stream pool
+		SequencerHostConn = nil
+		SequencerId = ""
 	}
 
+	// 1. Create properly configured host
+	if err := CreateLibP2pHost(); err != nil {
+		return fmt.Errorf("failed to create libp2p host: %w", err)
+	}
+
+	// No need to reassign SequencerHostConn as it's already set in CreateLibP2pHost()
+
+	// 2. Get sequencer info
+	sequencer, err := fetchSequencer(
+		"https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/sequencers.json",
+		config.SettingsObj.DataMarketAddress,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to fetch sequencer info: %w", err)
+	}
+
+	// 3. Parse multiaddr and create peer info
+	maddr, err := ma.NewMultiaddr(sequencer.Maddr)
+	if err != nil {
+		return fmt.Errorf("failed to parse multiaddr: %w", err)
+	}
+
+	sequencerInfo, err := peer.AddrInfoFromP2pAddr(maddr)
+	if err != nil {
+		return fmt.Errorf("failed to get addr info: %w", err)
+	}
+
+	// 4. Set sequencer ID
 	SequencerId = sequencerInfo.ID
-
-	if err := rpctorelay.Connect(context.Background(), *sequencerInfo); err != nil {
-		log.Debugln("Failed to connect to the Sequencer:", err)
-	} else {
-		log.Debugln("Successfully connected to the Sequencer: ", sequencerAddr.String())
+	if SequencerId.String() == "" {
+		return fmt.Errorf("empty sequencer ID")
 	}
+
+	// 5. Establish connection with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := SequencerHostConn.Connect(ctx, *sequencerInfo); err != nil {
+		return fmt.Errorf("failed to connect to sequencer: %w", err)
+	}
+
+	log.Infof("Successfully connected to Sequencer: %s with ID: %s",
+		sequencer.Maddr, SequencerId.String())
+	return nil
 }

@@ -5,16 +5,20 @@ import (
 	"proto-snapshot-server/pkgs/helpers"
 	"proto-snapshot-server/pkgs/service"
 	"sync"
-	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 func main() {
-	var wg sync.WaitGroup
 	helpers.InitLogger()
 	config.LoadConfig()
-	service.InitializeReportingService(config.SettingsObj.PowerloomReportingUrl, 5*time.Second)
-	service.ConfigureRelayer()
+
+	if err := service.InitializeService(); err != nil {
+		log.Fatalf("Failed to initialize service: %v", err)
+	}
+
+	var wg sync.WaitGroup
 	wg.Add(1)
-	go service.StartSubmissionServer(service.NewMsgServerImpl())
+	go service.StartSubmissionServer(service.NewMsgServerImplV2())
 	wg.Wait()
 }

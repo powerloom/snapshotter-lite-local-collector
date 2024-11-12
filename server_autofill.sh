@@ -14,12 +14,17 @@ if [ -z "$DATA_MARKET_CONTRACT" ]; then
     exit 1;
 fi
 
+if [ -z "$DATA_MARKET_IN_REQUEST" ]; then
+    # set default to false
+    echo "DATA_MARKET_IN_REQUEST not found, setting to false";
+    DATA_MARKET_IN_REQUEST="false"
+else
+    echo "DATA_MARKET_IN_REQUEST found, setting to $DATA_MARKET_IN_REQUEST";
+fi
+
 export MAX_STREAM_POOL_SIZE="${MAX_STREAM_POOL_SIZE:-2}"
 export STREAM_POOL_HEALTH_CHECK_INTERVAL="${STREAM_POOL_HEALTH_CHECK_INTERVAL:-30}"
-cd config
-
-# Template to actual settings.json manipulation
-cp settings.example.json settings.json
+export ENABLE_CRON_RESTART_LOCAL_COLLECTOR="${ENABLE_CRON_RESTART_LOCAL_COLLECTOR:-false}"
 
 priv_key="/keys/key.txt"
 
@@ -30,16 +35,3 @@ else
 fi
 
 export RELAYER_PRIVATE_KEY
-
-# Replace placeholders in settings.json with actual values from environment variables
-sed -i'.backup' -e "s#POWERLOOM_REPORTING_URL#$POWERLOOM_REPORTING_URL#" \
-                -e "s#SIGNER_ACCOUNT_ADDRESS#$SIGNER_ACCOUNT_ADDRESS#" \
-                -e "s#LOCAL_COLLECTOR_PORT#$LOCAL_COLLECTOR_PORT#" \
-                -e "s#RELAYER_PRIVATE_KEY#$RELAYER_PRIVATE_KEY#" settings.json \
-                -e "s#TRUSTED_RELAYERS_LIST_URL#$TRUSTED_RELAYERS_LIST_URL#" settings.json \
-                -e "s#DATA_MARKET_CONTRACT#$DATA_MARKET_CONTRACT#" settings.json \
-                -e "s#MAX_STREAM_POOL_SIZE#$MAX_STREAM_POOL_SIZE#" settings.json \
-                -e "s#STREAM_POOL_HEALTH_CHECK_INTERVAL#$STREAM_POOL_HEALTH_CHECK_INTERVAL#" settings.json
-
-# Cleanup backup file
-rm settings.json.backup
