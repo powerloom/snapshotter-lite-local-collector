@@ -28,11 +28,5 @@
     "maddr": "/dns/devnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "dataMarketAddress": "0x15c2900346eADf32165c78c317943B48C33A0429",
     "environment": "devnet-aavev3"
-  },
-  {
-    "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "maddr": "/dns/devnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "dataMarketAddress": "0xc390a15BcEB89C2d4910b2d3C696BfD21B190F07",
-    "environment": "devnet-multitest-aavev3"
   }
 ]
