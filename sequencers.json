@@ -1,11 +1,5 @@
 [
   {
-    "id": "QmTK9e9QNEotPkjWAdZT5bbYKV7PEJVu7iXzdVn3VZDEk9",
-    "maddr": "/dns/proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmTK9e9QNEotPkjWAdZT5bbYKV7PEJVu7iXzdVn3VZDEk9",
-    "dataMarketAddress": "0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c",
-    "environment": "prod"
-  },
-  {
     "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "maddr": "/dns/staging-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "dataMarketAddress": "0xB006AB33D47431E0C094321eF2061a12299B24f1",
@@ -28,5 +22,17 @@
     "maddr": "/dns/devnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "dataMarketAddress": "0x15c2900346eADf32165c78c317943B48C33A0429",
     "environment": "devnet-aavev3"
+  },
+  {
+    "id": "QmTK9e9QNEotPkjWAdZT5bbYKV7PEJVu7iXzdVn3VZDEk9",
+    "maddr": "/dns/proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmTK9e9QNEotPkjWAdZT5bbYKV7PEJVu7iXzdVn3VZDEk9",
+    "dataMarketAddress": "0x8023BD7A9e8386B10336E88294985e3Fbc6CF23F",
+    "environment": "prod-uniswapv2"
+  },
+  {
+    "id": "QmTK9e9QNEotPkjWAdZT5bbYKV7PEJVu7iXzdVn3VZDEk9",
+    "maddr": "/dns/proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmTK9e9QNEotPkjWAdZT5bbYKV7PEJVu7iXzdVn3VZDEk9",
+    "dataMarketAddress": "0xc390a15BcEB89C2d4910b2d3C696BfD21B190F07",
+    "environment": "prod-aavev3"
   }
 ]
