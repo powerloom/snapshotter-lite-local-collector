@@ -71,9 +71,6 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	log.Debugln("Sending submission with ID: ", submissionId.String())
 
 	submissionBytes := submissionIdBytes
-	if config.SettingsObj.DataMarketInRequest {
-		submissionBytes = append(submissionBytes, []byte(config.SettingsObj.DataMarketAddress)...)
-	}
 	submissionBytes = append(submissionBytes, subBytes...)
 
 	// Track received submission for this epoch
@@ -172,7 +169,7 @@ func (s *server) getOrCreateEpochMetrics(epochID uint64) *epochMetrics {
 		received:  atomic.Uint64{},
 		succeeded: atomic.Uint64{},
 	})
-	
+
 	// Type assert and return the metrics object
 	metrics := metricsValue.(*epochMetrics)
 
