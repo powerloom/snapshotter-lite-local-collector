@@ -42,15 +42,35 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 	}
 	deps.mu.RUnlock()
 
-	s := &server{
+	server := &server{
 		writeSemaphore: make(chan struct{}, config.SettingsObj.MaxConcurrentWrites),
 		metrics:        &sync.Map{},
 	}
 
 	// Start periodic metrics logging with 15 second interval
-	go s.logMetricsPeriodically(15 * time.Second)
+	go server.logMetricsPeriodically(15 * time.Second)
 
-	return s
+	return server
+}
+
+func StartSubmissionServer(server pkgs.SubmissionServer) {
+	// Create a TCP listener on the specified port from the configuration
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", config.SettingsObj.PortNumber))
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
+	}
+
+	// Create a new gRPC server instance
+	grpcServer = grpc.NewServer()
+
+	// Register the SubmissionServer with the gRPC server
+	pkgs.RegisterSubmissionServer(grpcServer, server)
+	log.Printf("Server listening at %v", listener.Addr())
+
+	// Start serving requests
+	if err := grpcServer.Serve(listener); err != nil {
+		log.Fatalf("failed to serve: %v", err)
+	}
 }
 
 func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSubmission) (*pkgs.SubmissionResponse, error) {
@@ -90,24 +110,6 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 
 func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotSimulationServer) error {
 	return nil // not implemented, will remove
-}
-
-func (s *server) mustEmbedUnimplementedSubmissionServer() {
-}
-
-func StartSubmissionServer(server pkgs.SubmissionServer) {
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", config.SettingsObj.PortNumber))
-	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
-	}
-
-	s := grpc.NewServer()
-	pkgs.RegisterSubmissionServer(s, server)
-	log.Printf("Server listening at %v", lis.Addr())
-
-	if err := s.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %v", err)
-	}
 }
 
 func (s *server) writeToStream(data []byte, submissionId string, submission *pkgs.SnapshotSubmission) error {
@@ -238,4 +240,36 @@ func (s *server) logMetricsPeriodically(interval time.Duration) {
 			}).Info("📈 Epoch metrics")
 		}
 	}
+}
+
+func (s *server) GracefulShutdown() {
+	log.Info("Starting graceful shutdown...")
+
+	// Wait for all ongoing writes to complete
+	for i := 0; i < cap(s.writeSemaphore); i++ {
+		s.writeSemaphore <- struct{}{}
+	}
+
+	// Close the write semaphore to stop accepting new writes
+	close(s.writeSemaphore)
+
+	// Stop the gRPC server gracefully
+	grpcServer.GracefulStop()
+
+	// Stop the libp2p stream pool
+	if pool := GetLibp2pStreamPool(); pool != nil {
+		pool.Stop()
+	}
+
+	log.Info("🧹 Graceful shutdown complete")
+}
+
+// GracefulShutdownServer initiates the graceful shutdown for the provided SubmissionServer
+func GracefulShutdownServer(s pkgs.SubmissionServer) {
+	if srv, ok := s.(*server); ok {
+		srv.GracefulShutdown() // Trigger the graceful shutdown of the server
+		return
+	}
+
+	log.Warn("Graceful shutdown is not supported for the provided server instance")
 }

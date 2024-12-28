@@ -4,21 +4,24 @@ import (
 	"fmt"
 	"proto-snapshot-server/config"
 	"sync"
-	log "github.com/sirupsen/logrus"
+
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	log "github.com/sirupsen/logrus"
+	"google.golang.org/grpc"
 )
 
 type ServiceDependencies struct {
 	hostConn    host.Host
-	sequencerId peer.ID
+	sequencerID peer.ID
 	streamPool  *StreamPool
 	initialized bool
 	mu          sync.RWMutex
 }
 
 var (
-	deps ServiceDependencies
+	deps       ServiceDependencies
+	grpcServer *grpc.Server
 )
 
 func InitializeService() error {
@@ -39,12 +42,13 @@ func InitializeService() error {
 	if SequencerHostConn == nil {
 		return fmt.Errorf("sequencer host connection not initialized")
 	}
-	if SequencerId.String() == "" {
+
+	if SequencerID.String() == "" {
 		return fmt.Errorf("sequencer ID not initialized")
 	}
 
 	deps.hostConn = SequencerHostConn
-	deps.sequencerId = SequencerId
+	deps.sequencerID = SequencerID
 
 	// Initialize stream pool
 	if err := InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize); err != nil {
@@ -53,8 +57,7 @@ func InitializeService() error {
 
 	deps.streamPool = GetLibp2pStreamPool()
 	deps.initialized = true
-	
-	log.Info("Service initialization complete with sequencer ID: ", deps.sequencerId.String())
+
+	log.Info("Service initialization complete with sequencer ID: ", deps.sequencerID.String())
 	return nil
 }
-
