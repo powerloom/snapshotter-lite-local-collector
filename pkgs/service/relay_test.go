@@ -2,14 +2,15 @@ package service
 
 import (
 	"context"
-	"github.com/libp2p/go-libp2p"
-	"github.com/libp2p/go-libp2p/core/peer"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"proto-snapshot-server/config"
 	"testing"
+
+	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 func TestConnectToSequencerP2P(t *testing.T) {
@@ -36,7 +37,7 @@ func TestConnectToSequencerP2P(t *testing.T) {
 	// Initialize the configuration settings
 	config.SettingsObj = &config.Settings{
 		TrustedRelayersListUrl: ts.URL,
-		SequencerId:            "QmdJbNsbHpFseUPKC9vLt4vMsfdxA4dyHPzsAWuzYz3Yxx",
+		SequencerID:            "QmdJbNsbHpFseUPKC9vLt4vMsfdxA4dyHPzsAWuzYz3Yxx",
 	}
 
 	host, err := libp2p.New()
@@ -50,12 +51,11 @@ func TestConnectToSequencerP2P(t *testing.T) {
 
 	// Test the function
 	result := ConnectToSequencerP2P(relayers, host)
-
 	if !result {
 		t.Error("expected true, got false")
 	}
 
 	log.Println("Connected to peer 1: ", host.Network().ConnsToPeer(peer.ID(relayers[0].ID)))
 	log.Println("Connected to peer 2: ", host.Network().ConnsToPeer(peer.ID(relayers[0].ID)))
-	log.Println("Connected to peer 3: ", host.Network().ConnsToPeer(peer.ID(config.SettingsObj.SequencerId)))
+	log.Println("Connected to peer 3: ", host.Network().ConnsToPeer(peer.ID(config.SettingsObj.SequencerID)))
 }
