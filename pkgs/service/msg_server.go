@@ -126,13 +126,23 @@ func (s *server) writeToStream(data []byte, submissionId string, submission *pkg
 	success := false
 	defer func() {
 		if !success {
-			log.Errorf("❌ Failed defer for submission (Project: %s, Epoch: %d) with ID: %s: %v",
-				submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
+			if submission.Request.EpochId == 0 {
+				log.Errorf("❌ Failed defer for SIMULATION snapshot submission (Project: %s, Epoch: %d) with ID: %s: %v",
+					submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
+			} else {
+				log.Errorf("❌ Failed defer for snapshot submission (Project: %s, Epoch: %d) with ID: %s: %v",
+					submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
+			}
 			stream.Reset()
 			stream.Close()
 		} else {
-			log.Infof("⏰ Succesful defer for submission (Project: %s, Epoch: %d) with ID: %s",
-				submission.Request.ProjectId, submission.Request.EpochId, submissionId)
+			if submission.Request.EpochId == 0 {
+				log.Infof("⏰ Succesful defer for SIMULATION snapshot submission (Project: %s, Epoch: %d) with ID: %s",
+					submission.Request.ProjectId, submission.Request.EpochId, submissionId)
+			} else {
+				log.Infof("⏰ Succesful defer for snapshot submission (Project: %s, Epoch: %d) with ID: %s",
+					submission.Request.ProjectId, submission.Request.EpochId, submissionId)
+			}
 			// Get metrics and increment success counter
 			if metrics := s.getOrCreateEpochMetrics(submission.Request.EpochId); metrics != nil {
 				metrics.succeeded.Add(1)
@@ -157,8 +167,13 @@ func (s *server) writeToStream(data []byte, submissionId string, submission *pkg
 	}
 
 	success = true
-	log.Infof("✅ Successfully wrote to stream for submission (Project: %s, Epoch: %d) with ID: %s",
-		submission.Request.ProjectId, submission.Request.EpochId, submissionId)
+	if submission.Request.EpochId == 0 {
+		log.Infof("✅ Successfully wrote to stream for SIMULATION snapshot submission (Project: %s, Epoch: %d) with ID: %s",
+			submission.Request.ProjectId, submission.Request.EpochId, submissionId)
+	} else {
+		log.Infof("✅ Successfully wrote to stream for snapshot submission (Project: %s, Epoch: %d) with ID: %s",
+			submission.Request.ProjectId, submission.Request.EpochId, submissionId)
+	}
 	return nil
 }
 
