@@ -48,8 +48,8 @@
     "environment": "prod-aavev3"
   },
   {
-    "id": "QmTK9e9QNEotPkjWAdZT5bbYKV7PEJVu7iXzdVn3VZDEk9",
-    "maddr": "/dns/mainnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmTK9e9QNEotPkjWAdZT5bbYKV7PEJVu7iXzdVn3VZDEk9",
+    "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
+    "maddr": "/dns/mainnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "dataMarketAddress": "0xc0feFF0FdD0739C7A3F801e848dD6C15968f15Bd",
     "environment": "prod-test-uniswapv2"
   }
