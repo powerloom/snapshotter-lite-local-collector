@@ -24,54 +24,48 @@ import (
 
 var (
 	SequencerHostConn host.Host
-	SequencerId       peer.ID
+	SequencerID       peer.ID
 	sequencerMu       sync.RWMutex
 	ConnManager       *connmgr.BasicConnMgr
 	TcpAddr           ma.Multiaddr
 	rm                network.ResourceManager
-	activeConnections int
 )
-
-func handleConnectionEstablished(network network.Network, conn network.Conn) {
-	activeConnections++
-}
-
-func handleConnectionClosed(network network.Network, conn network.Conn) {
-	activeConnections--
-}
 
 // Thread-safe getter for connection state
 func GetSequencerConnection() (host.Host, peer.ID, error) {
 	sequencerMu.RLock()
 	defer sequencerMu.RUnlock()
-	
-	if SequencerHostConn == nil || SequencerId.String() == "" {
+
+	if SequencerHostConn == nil || SequencerID.String() == "" {
 		return nil, "", fmt.Errorf("sequencer connection not established")
 	}
-	return SequencerHostConn, SequencerId, nil
+
+	return SequencerHostConn, SequencerID, nil
 }
 
 func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
 	for _, relayer := range relayers {
-		relayerMA, err := ma.NewMultiaddr(relayer.Maddr)
-		relayerInfo, err := peer.AddrInfoFromP2pAddr(relayerMA)
+		relayerMA, _ := ma.NewMultiaddr(relayer.Maddr)
+		relayerInfo, _ := peer.AddrInfoFromP2pAddr(relayerMA)
+
 		if reservation, err := circuitv2.Reserve(context.Background(), p2pHost, *relayerInfo); err != nil {
 			log.Fatalf("Failed to request reservation with relay: %v", err)
 		} else {
 			fmt.Println("Reservation with relay successful", reservation.Expiration, reservation.LimitDuration)
 		}
-		sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("%s/p2p-circuit/p2p/%s", relayer.Maddr, config.SettingsObj.SequencerId))
 
+		sequencerAddr, err := ma.NewMultiaddr(fmt.Sprintf("%s/p2p-circuit/p2p/%s", relayer.Maddr, config.SettingsObj.SequencerID))
 		if err != nil {
 			log.Debugln(err.Error())
 		}
-
 		log.Debugln("Connecting to Sequencer: ", sequencerAddr.String())
+
 		isConnected := AddPeerConnection(context.Background(), p2pHost, sequencerAddr.String())
 		if isConnected {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -149,7 +143,7 @@ func EstablishSequencerConnection() error {
 		// Important: Signal that connection is being reset
 		// This should trigger cleanup of existing stream pool
 		SequencerHostConn = nil
-		SequencerId = ""
+		SequencerID = ""
 	}
 
 	// 1. Create properly configured host
@@ -180,8 +174,8 @@ func EstablishSequencerConnection() error {
 	}
 
 	// 4. Set sequencer ID
-	SequencerId = sequencerInfo.ID
-	if SequencerId.String() == "" {
+	SequencerID = sequencerInfo.ID
+	if SequencerID.String() == "" {
 		return fmt.Errorf("empty sequencer ID")
 	}
 
@@ -193,7 +187,6 @@ func EstablishSequencerConnection() error {
 		return fmt.Errorf("failed to connect to sequencer: %w", err)
 	}
 
-	log.Infof("Successfully connected to Sequencer: %s with ID: %s",
-		sequencer.Maddr, SequencerId.String())
+	log.Infof("Successfully connected to Sequencer: %s with ID: %s", sequencer.Maddr, SequencerID.String())
 	return nil
 }

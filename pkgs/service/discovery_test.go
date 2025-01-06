@@ -4,16 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/libp2p/go-libp2p"
-	"github.com/libp2p/go-libp2p/core/peer"
-	ma "github.com/multiformats/go-multiaddr"
-	log "github.com/sirupsen/logrus"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"proto-snapshot-server/config"
 	"testing"
+
+	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/peer"
+	ma "github.com/multiformats/go-multiaddr"
+	log "github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/assert"
 )
 
 type Settings struct {
@@ -83,7 +84,6 @@ func TestAddPeerConnection(t *testing.T) {
 	relayerAddr := "/ip4/104.248.63.86/tcp/5001/p2p/QmQSEao6C3SuPZ8cWiYccPqsd7LtWBTzNgXQZiAjeGTQpm"
 
 	result := AddPeerConnection(ctx, host, relayerAddr)
-
 	if !result {
 		t.Error("expected true, got false")
 	}

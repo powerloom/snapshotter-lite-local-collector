@@ -11,7 +11,7 @@ import (
 var SettingsObj *Settings
 
 type Settings struct {
-	SequencerId            string
+	SequencerID            string
 	RelayerRendezvousPoint string
 	ClientRendezvousPoint  string
 	RelayerPrivateKey      string
@@ -53,8 +53,7 @@ func LoadConfig() {
 	// Optional fields with defaults
 	config.PowerloomReportingUrl = os.Getenv("POWERLOOM_REPORTING_URL")
 	config.SignerAccountAddress = os.Getenv("SIGNER_ACCOUNT_ADDRESS")
-	config.TrustedRelayersListUrl = getEnvWithDefault("TRUSTED_RELAYERS_LIST_URL",
-		"https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/relayers.json")
+	config.TrustedRelayersListUrl = getEnvWithDefault("TRUSTED_RELAYERS_LIST_URL", "https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/relayers.json")
 
 	// Load private key from file or env
 	config.RelayerPrivateKey = loadPrivateKey()

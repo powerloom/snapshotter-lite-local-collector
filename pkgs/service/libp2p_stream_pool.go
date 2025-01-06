@@ -116,6 +116,7 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create new stream: %w", err)
 		}
+
 		return stream, nil
 	}
 }
