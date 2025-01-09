@@ -58,5 +58,11 @@
     "maddr": "/dns/mainnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "dataMarketAddress": "0xdE95f6d0D1A7B8411fCbfc60d5c2C5Df69d667a9",
     "environment": "mainnet-aavev3"
+  },
+  {
+    "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
+    "maddr": "/dns/mainnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
+    "dataMarketAddress": "0x3B9a10a96F2dC4437172031B75a9EDFeFF6f6160",
+    "environment": "mainnet-dummy-test-uniswapV2"
   }
 ]
