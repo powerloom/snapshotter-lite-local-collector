@@ -2,20 +2,8 @@
   {
     "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "maddr": "/dns/staging-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "dataMarketAddress": "0xD53FBB0b8cdB6b1231c93ad5210273d7ab98A8d3",
+    "dataMarketAddress": "0xB955157F36008EDDE2E6b107696E9bA0bD840051",
     "environment": "staging-uniswapv2"
-  },
-  {
-    "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "maddr": "/dns/staging-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "dataMarketAddress": "0xD9a127170600A8f99deaA84DD3b40DbDd2730e6c",
-    "environment": "staging-aaveV3"
-  },
-  {
-    "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "maddr": "/dns/staging-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "dataMarketAddress": "0x84861D8e5DA3c78cDF6e4Af8A8FeF44443A9964e",
-    "environment": "staging-uniswapv3"
   },
   {
     "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
