@@ -20,20 +20,8 @@
   {
     "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "maddr": "/dns/devnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "dataMarketAddress": "0xaa4604f88f75B036fD09Bea876e4835731655ebf",
+    "dataMarketAddress": "0x96c4BC757398BC7EcE99d73c39775096eb281ce7",
     "environment": "devnet-uniswapv2"
-  },
-  {
-    "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "maddr": "/dns/devnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "dataMarketAddress": "0xbb5649ed607B96Ee4163570a8389B9Bf9f77a15d",
-    "environment": "devnet-uniswapv3"
-  },
-  {
-    "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "maddr": "/dns/devnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "dataMarketAddress": "0x15c2900346eADf32165c78c317943B48C33A0429",
-    "environment": "devnet-aavev3"
   },
   {
     "id": "QmTK9e9QNEotPkjWAdZT5bbYKV7PEJVu7iXzdVn3VZDEk9",
