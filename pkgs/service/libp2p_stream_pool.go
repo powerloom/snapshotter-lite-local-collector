@@ -91,34 +91,29 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Keep trying until we get a stream or hit an error
-	for {
-		// Check if we have a usable stream
-		if len(p.streams) > 0 {
-			stream := p.streams[len(p.streams)-1]
-			p.streams = p.streams[:len(p.streams)-1]
+	// Try to get a valid stream from the pool
+	for len(p.streams) > 0 {
+		// Get last stream from pool
+		lastIdx := len(p.streams) - 1
+		stream := p.streams[lastIdx]
 
-			// Verify stream is on current connection
-			if stream.Conn().ID() != SequencerHostConn.ID().String() {
-				stream.Close()
-				continue
-			}
+		// Remove it from pool before validation
+		p.streams = p.streams[:lastIdx]
 
-			// Only do ping check if the connection looks good
-			if err := p.pingStream(stream); err == nil {
-				return stream, nil
-			}
+		// Validate the stream
+		if stream.Conn().ID() != SequencerHostConn.ID().String() {
 			stream.Close()
+			continue
 		}
 
-		// Create new stream if pool is empty
-		stream, err := p.createNewStreamWithRetry()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create new stream: %w", err)
+		if err := p.pingStream(stream); err == nil {
+			return stream, nil
 		}
-
-		return stream, nil
+		stream.Close()
 	}
+
+	// No valid streams in pool
+	return nil, fmt.Errorf("no valid streams available in pool")
 }
 
 func (p *StreamPool) ReturnStream(stream network.Stream) {
