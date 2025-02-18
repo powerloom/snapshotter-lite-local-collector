@@ -30,6 +30,12 @@
     "environment": "devnet-aavev3"
   },
   {
+    "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
+    "maddr": "/dns/devnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
+    "dataMarketAddress": "0x1b14F2fbA449f1edAF6c04db8DBBb8c1D6B7ECa5",
+    "environment": "devnet-uniswapv2-short"
+  },
+  {
     "id": "QmTK9e9QNEotPkjWAdZT5bbYKV7PEJVu7iXzdVn3VZDEk9",
     "maddr": "/dns/proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmTK9e9QNEotPkjWAdZT5bbYKV7PEJVu7iXzdVn3VZDEk9",
     "dataMarketAddress": "0x8023BD7A9e8386B10336E88294985e3Fbc6CF23F",
