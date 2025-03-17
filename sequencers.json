@@ -62,6 +62,12 @@
   {
     "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "maddr": "/dns/mainnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
+    "dataMarketAddress": "0x21cb57C1f2352ad215a463DD867b838749CD3b8f",
+    "environment": "mainnet-v2-uniswapv2"
+  },
+  {
+    "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
+    "maddr": "/dns/mainnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "dataMarketAddress": "0xdE95f6d0D1A7B8411fCbfc60d5c2C5Df69d667a9",
     "environment": "mainnet-aavev3"
   }
