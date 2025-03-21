@@ -25,6 +25,8 @@ type StreamPool struct {
 	streams     []network.Stream
 	maxSize     int
 	sequencerID peer.ID
+	// Add request management
+	reqQueue chan struct{} // Semaphore for request management
 }
 
 // createStream is now a method of StreamPool
@@ -62,6 +64,8 @@ func InitLibp2pStreamPool(maxSize int) error {
 		streams:     make([]network.Stream, 0, maxSize),
 		maxSize:     maxSize,
 		sequencerID: seqId,
+		// Buffer size based on max concurrent requests we can handle
+		reqQueue: make(chan struct{}, config.SettingsObj.MaxConcurrentWrites),
 	}
 
 	// Pre-fill the pool with streams
@@ -92,32 +96,77 @@ func GetLibp2pStreamPool() *StreamPool {
 }
 
 func (p *StreamPool) GetStream() (network.Stream, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	log.Debug("🎯 Attempting to acquire stream")
 
-	// Try to get a valid stream from the pool
-	for len(p.streams) > 0 {
-		// Get last stream from pool
-		lastIdx := len(p.streams) - 1
-		stream := p.streams[lastIdx]
-
-		// Remove it from pool before validation
-		p.streams = p.streams[:lastIdx]
-
-		// Validate the stream
-		if stream.Conn().ID() != SequencerHostConn.ID().String() {
-			stream.Close()
-			continue
-		}
-
-		if err := p.pingStream(stream); err == nil {
-			return stream, nil
-		}
-		stream.Close()
+	// First, try to get a slot in the request queue
+	select {
+	case p.reqQueue <- struct{}{}:
+		log.Debug("✅ Acquired request queue slot")
+		defer func() {
+			<-p.reqQueue
+			log.Debug("♻️ Released request queue slot")
+		}()
+	default:
+		log.Warn("🚫 Request queue full - backpressure applied")
+		return nil, fmt.Errorf("request queue full - try again later")
 	}
 
-	// No valid streams in pool
-	return nil, fmt.Errorf("no valid streams available in pool")
+	// Now we have a slot, wait for refresh to complete if needed
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = 30 * time.Second
+	b.InitialInterval = 100 * time.Millisecond
+
+	var stream network.Stream
+	attempt := 0
+	err := backoff.Retry(func() error {
+		attempt++
+		if connectionRefreshing.Load() {
+			log.Debugf("⏳ Stream acquisition waiting for refresh (attempt %d)", attempt)
+			return fmt.Errorf("connection refresh in progress")
+		}
+
+		p.mu.Lock()
+		defer p.mu.Unlock()
+
+		if len(p.streams) > 0 {
+			stream = p.streams[len(p.streams)-1]
+			p.streams = p.streams[:len(p.streams)-1]
+			log.Debug("🔍 Retrieved stream from pool, verifying...")
+
+			if stream.Conn().ID() != SequencerHostConn.ID().String() {
+				log.Debug("⚠️ Found stale stream, closing")
+				stream.Close()
+				return fmt.Errorf("stale stream detected")
+			}
+
+			if err := p.pingStream(stream); err != nil {
+				log.Debug("💔 Stream health check failed, closing")
+				stream.Close()
+				return fmt.Errorf("stream health check failed: %v", err)
+			}
+
+			log.Debug("✨ Retrieved healthy stream from pool")
+			return nil
+		}
+
+		log.Debug("🏗️ Creating new stream")
+		newStream, err := p.createNewStreamWithRetry()
+		if err != nil {
+			log.Debugf("❌ Failed to create new stream: %v", err)
+			return fmt.Errorf("failed to create new stream: %v", err)
+		}
+		stream = newStream
+		log.Debug("✅ Created new stream successfully")
+		return nil
+	}, b)
+
+	if err != nil {
+		log.Errorf("❌ Stream acquisition failed after %d attempts: %v", attempt, err)
+		return nil, fmt.Errorf("failed to acquire stream after retries: %w", err)
+	}
+
+	log.Debug("🎉 Successfully acquired stream")
+	return stream, nil
 }
 
 func (p *StreamPool) ReturnStream(stream network.Stream) {

@@ -28,6 +28,9 @@ type Settings struct {
 	StreamWriteTimeout       time.Duration
 	MaxWriteRetries          int
 	MaxConcurrentWrites      int
+
+	// Connection management settings
+	ConnectionRefreshInterval time.Duration
 }
 
 func LoadConfig() {
@@ -64,6 +67,9 @@ func LoadConfig() {
 	config.StreamWriteTimeout = time.Duration(getEnvAsInt("STREAM_WRITE_TIMEOUT_MS", 5000)) * time.Millisecond
 	config.MaxWriteRetries = getEnvAsInt("MAX_WRITE_RETRIES", 5)
 	config.MaxConcurrentWrites = getEnvAsInt("MAX_CONCURRENT_WRITES", 1000)
+
+	// Add connection refresh interval setting (default 5 minutes)
+	config.ConnectionRefreshInterval = time.Duration(getEnvAsInt("CONNECTION_REFRESH_INTERVAL_SEC", 300)) * time.Second
 
 	SettingsObj = &config
 }

@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"proto-snapshot-server/config"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	circuitv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 
 	"github.com/libp2p/go-libp2p"
@@ -23,12 +25,13 @@ import (
 )
 
 var (
-	SequencerHostConn host.Host
-	SequencerID       peer.ID
-	sequencerMu       sync.RWMutex
-	ConnManager       *connmgr.BasicConnMgr
-	TcpAddr           ma.Multiaddr
-	rm                network.ResourceManager
+	SequencerHostConn    host.Host
+	SequencerID          peer.ID
+	sequencerMu          sync.RWMutex
+	ConnManager          *connmgr.BasicConnMgr
+	TcpAddr              ma.Multiaddr
+	rm                   network.ResourceManager
+	connectionRefreshing atomic.Bool
 )
 
 // Thread-safe getter for connection state
@@ -189,4 +192,73 @@ func EstablishSequencerConnection() error {
 
 	log.Infof("Successfully connected to Sequencer: %s with ID: %s", sequencer.Maddr, SequencerID.String())
 	return nil
+}
+
+func StartConnectionRefreshLoop(ctx context.Context) {
+	ticker := time.NewTicker(config.SettingsObj.ConnectionRefreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			log.Info("🔄 Starting periodic connection refresh cycle")
+
+			connectionRefreshing.Store(true)
+			log.Info("🚫 Connection refresh state activated - new streams will wait")
+
+			pool := GetLibp2pStreamPool()
+			if pool == nil {
+				log.Error("❌ Stream pool not available for refresh")
+				connectionRefreshing.Store(false)
+				continue
+			}
+
+			// Wait for in-flight requests with exponential backoff
+			b := backoff.NewExponentialBackOff()
+			b.MaxElapsedTime = 30 * time.Second
+			b.InitialInterval = 100 * time.Millisecond
+
+			log.Info("⏳ Waiting for in-flight requests to complete")
+			err := backoff.Retry(func() error {
+				filled := 0
+				for i := 0; i < cap(pool.reqQueue); i++ {
+					select {
+					case pool.reqQueue <- struct{}{}:
+						filled++
+					default:
+						log.Infof("🔴 Found %d/%d active requests", cap(pool.reqQueue)-filled, cap(pool.reqQueue))
+						return fmt.Errorf("requests still in flight")
+					}
+				}
+				log.Info("✅ All request slots available - proceeding with refresh")
+				// Return tokens
+				for i := 0; i < filled; i++ {
+					<-pool.reqQueue
+				}
+				return nil
+			}, b)
+
+			if err != nil {
+				log.Warnf("⚠️ Proceeding with refresh despite active requests: %v", err)
+			}
+
+			log.Info("🔌 Refreshing connection to sequencer")
+			if err := EstablishSequencerConnection(); err != nil {
+				log.Errorf("❌ Failed to refresh connection: %v", err)
+				connectionRefreshing.Store(false)
+				continue
+			}
+			log.Info("✅ New connection established successfully")
+
+			log.Info("🏊 Rebuilding stream pool")
+			if err := RebuildStreamPool(); err != nil {
+				log.Errorf("❌ Failed to rebuild stream pool: %v", err)
+			}
+
+			connectionRefreshing.Store(false)
+			log.Info("✅ Connection refresh cycle completed successfully")
+		}
+	}
 }
