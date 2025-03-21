@@ -7,11 +7,14 @@ import (
 	"net"
 	"proto-snapshot-server/config"
 	"proto-snapshot-server/pkgs"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
+	"github.com/libp2p/go-libp2p/core/network"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -105,6 +108,28 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 		}
 	}()
 
+	// Try to write with backoff
+	var errBackoff error
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = 30 * time.Second
+
+	errBackoff = backoff.Retry(func() error {
+		if err := s.writeToStream(submissionBytes, submissionId.String(), submission); err != nil {
+			if strings.Contains(err.Error(), "request queue full") ||
+				strings.Contains(err.Error(), "connection refresh in progress") {
+				// Retriable errors
+				return err
+			}
+			// Non-retriable errors
+			return backoff.Permanent(err)
+		}
+		return nil
+	}, b)
+
+	if errBackoff != nil {
+		return &pkgs.SubmissionResponse{Message: "Failure"}, errBackoff
+	}
+
 	return &pkgs.SubmissionResponse{Message: "Success"}, nil
 }
 
@@ -113,14 +138,37 @@ func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotS
 }
 
 func (s *server) writeToStream(data []byte, submissionId string, submission *pkgs.SnapshotSubmission) error {
+	log.Debugf("📝 Starting stream write for submission %s", submissionId)
+
 	pool := GetLibp2pStreamPool()
 	if pool == nil {
-		return fmt.Errorf("stream pool not available")
+		return fmt.Errorf("❌ stream pool not available")
 	}
 
-	stream, err := pool.GetStream()
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = 30 * time.Second
+
+	var stream network.Stream
+	attempt := 0
+	err := backoff.Retry(func() error {
+		attempt++
+		log.Debugf("🔄 Attempting to get stream (attempt %d)", attempt)
+		s, err := pool.GetStream()
+		if err != nil {
+			if strings.Contains(err.Error(), "connection refresh in progress") {
+				log.Debugf("⏳ Waiting for connection refresh to complete (attempt %d)", attempt)
+				return err
+			}
+			log.Debugf("❌ Non-retriable error getting stream: %v", err)
+			return backoff.Permanent(err)
+		}
+		stream = s
+		log.Debug("✅ Successfully acquired stream")
+		return nil
+	}, b)
+
 	if err != nil {
-		return fmt.Errorf("failed to get stream: %w", err)
+		return err
 	}
 
 	success := false
