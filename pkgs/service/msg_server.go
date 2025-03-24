@@ -100,34 +100,34 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	metrics := s.getOrCreateEpochMetrics(submission.Request.EpochId)
 	metrics.received.Add(1)
 
-	s.writeSemaphore <- struct{}{}
-	go func() {
-		defer func() { <-s.writeSemaphore }()
-		if err := s.writeToStream(submissionBytes, submissionId.String(), submission); err != nil {
-			log.Errorf("❌ Stream write failed for %s: %v", submissionId.String(), err)
-		}
-	}()
-
-	// Try to write with backoff
-	var errBackoff error
+	// Single write attempt with backoff
 	b := backoff.NewExponentialBackOff()
 	b.MaxElapsedTime = 30 * time.Second
 
-	errBackoff = backoff.Retry(func() error {
+	err = backoff.Retry(func() error {
+		// First get writeSemaphore for GRPC concurrency control
+		select {
+		case s.writeSemaphore <- struct{}{}:
+			defer func() { <-s.writeSemaphore }()
+		default:
+			return fmt.Errorf("server at capacity") // Non-retriable
+		}
+
+		// Then try to write
 		if err := s.writeToStream(submissionBytes, submissionId.String(), submission); err != nil {
 			if strings.Contains(err.Error(), "request queue full") ||
 				strings.Contains(err.Error(), "connection refresh in progress") {
-				// Retriable errors
-				return err
+				return err // Retriable
 			}
-			// Non-retriable errors
 			return backoff.Permanent(err)
 		}
+		metrics.succeeded.Add(1)
 		return nil
 	}, b)
 
-	if errBackoff != nil {
-		return &pkgs.SubmissionResponse{Message: "Failure"}, errBackoff
+	if err != nil {
+		log.Errorf("❌ Failed to submit snapshot after retries: %v", err)
+		return &pkgs.SubmissionResponse{Message: "Failure"}, err
 	}
 
 	return &pkgs.SubmissionResponse{Message: "Success"}, nil

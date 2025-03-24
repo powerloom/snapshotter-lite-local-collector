@@ -25,8 +25,8 @@ type StreamPool struct {
 	streams     []network.Stream
 	maxSize     int
 	sequencerID peer.ID
-	// Add request management
-	reqQueue chan struct{} // Semaphore for request management
+	reqQueue    chan struct{}  // For stream acquisition
+	activeOps   sync.WaitGroup // Track active operations
 }
 
 // createStream is now a method of StreamPool
@@ -60,8 +60,7 @@ func InitLibp2pStreamPool(maxSize int) error {
 		streams:     make([]network.Stream, 0, maxSize),
 		maxSize:     maxSize,
 		sequencerID: seqId,
-		// Buffer size based on max concurrent requests we can handle
-		reqQueue: make(chan struct{}, config.SettingsObj.MaxConcurrentWrites),
+		reqQueue:    make(chan struct{}, config.SettingsObj.MaxStreamQueueSize),
 	}
 
 	// Pre-fill the pool with streams
@@ -94,7 +93,7 @@ func GetLibp2pStreamPool() *StreamPool {
 func (p *StreamPool) GetStream() (network.Stream, error) {
 	log.Debug("🎯 Attempting to acquire stream")
 
-	// First, try to get a slot in the request queue
+	// First check if we can queue the request
 	select {
 	case p.reqQueue <- struct{}{}:
 		log.Debug("✅ Acquired request queue slot")
@@ -107,7 +106,14 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 		return nil, fmt.Errorf("request queue full - try again later")
 	}
 
-	// Now we have a slot, wait for refresh to complete if needed
+	log.Debug("👥 Tracking active operation")
+	p.activeOps.Add(1)
+	defer func() {
+		p.activeOps.Done()
+		log.Debug("👋 Operation completed and untracked")
+	}()
+
+	// Now wait for refresh to complete if needed
 	b := backoff.NewExponentialBackOff()
 	b.MaxElapsedTime = 30 * time.Second
 	b.InitialInterval = 100 * time.Millisecond
