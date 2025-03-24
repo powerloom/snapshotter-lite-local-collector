@@ -28,6 +28,7 @@ type Settings struct {
 	StreamWriteTimeout       time.Duration
 	MaxWriteRetries          int
 	MaxConcurrentWrites      int
+	MaxStreamQueueSize       int
 
 	// Connection management settings
 	ConnectionRefreshInterval time.Duration
@@ -62,11 +63,12 @@ func LoadConfig() {
 	config.RelayerPrivateKey = loadPrivateKey()
 
 	// Numeric values with defaults
-	config.MaxStreamPoolSize = getEnvAsInt("MAX_STREAM_POOL_SIZE", 50)
+	config.MaxStreamPoolSize = getEnvAsInt("MAX_STREAM_POOL_SIZE", 100)
 	config.StreamHealthCheckTimeout = time.Duration(getEnvAsInt("STREAM_HEALTH_CHECK_TIMEOUT_MS", 5000)) * time.Millisecond
 	config.StreamWriteTimeout = time.Duration(getEnvAsInt("STREAM_WRITE_TIMEOUT_MS", 5000)) * time.Millisecond
 	config.MaxWriteRetries = getEnvAsInt("MAX_WRITE_RETRIES", 5)
-	config.MaxConcurrentWrites = getEnvAsInt("MAX_CONCURRENT_WRITES", 1000)
+	config.MaxConcurrentWrites = getEnvAsInt("MAX_CONCURRENT_WRITES", 100)
+	config.MaxStreamQueueSize = getEnvAsInt("MAX_STREAM_QUEUE_SIZE", 1000)
 
 	// Add connection refresh interval setting (default 5 minutes)
 	config.ConnectionRefreshInterval = time.Duration(getEnvAsInt("CONNECTION_REFRESH_INTERVAL_SEC", 300)) * time.Second
