@@ -25,8 +25,14 @@ type StreamPool struct {
 	streams     []network.Stream
 	maxSize     int
 	sequencerID peer.ID
-	reqQueue    chan struct{}  // For stream acquisition
+	reqQueue    chan *reqSlot  // For stream acquisition with identifiers
 	activeOps   sync.WaitGroup // Track active operations
+}
+
+// reqSlot represents a request queue slot with an identifier
+type reqSlot struct {
+	id        string
+	createdAt time.Time
 }
 
 // createStream is now a method of StreamPool
@@ -60,7 +66,7 @@ func InitLibp2pStreamPool(maxSize int) error {
 		streams:     make([]network.Stream, 0, maxSize),
 		maxSize:     maxSize,
 		sequencerID: seqId,
-		reqQueue:    make(chan struct{}, config.SettingsObj.MaxStreamQueueSize),
+		reqQueue:    make(chan *reqSlot, config.SettingsObj.MaxStreamQueueSize),
 	}
 
 	// Pre-fill the pool with streams
@@ -93,14 +99,16 @@ func GetLibp2pStreamPool() *StreamPool {
 func (p *StreamPool) GetStream() (network.Stream, error) {
 	log.Debug("🎯 Attempting to acquire stream")
 
+	// Create a new request slot with identifier
+	slot := &reqSlot{
+		id:        fmt.Sprintf("req-%d", time.Now().UnixNano()),
+		createdAt: time.Now(),
+	}
+
 	// First check if we can queue the request
 	select {
-	case p.reqQueue <- struct{}{}:
-		log.Debug("✅ Acquired request queue slot")
-		defer func() {
-			<-p.reqQueue
-			log.Debug("♻️ Released request queue slot")
-		}()
+	case p.reqQueue <- slot:
+		log.Debugf("✅ Acquired request queue slot [%s]", slot.id)
 	default:
 		log.Warn("🚫 Request queue full - backpressure applied")
 		return nil, fmt.Errorf("request queue full - try again later")
@@ -123,7 +131,7 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 	err := backoff.Retry(func() error {
 		attempt++
 		if connectionRefreshing.Load() {
-			log.Debugf("⏳ Stream acquisition waiting for refresh (attempt %d)", attempt)
+			log.Debugf("⏳ Stream acquisition waiting for refresh (attempt %d) [slot: %s]", attempt, slot.id)
 			return fmt.Errorf("connection refresh in progress")
 		}
 
@@ -133,65 +141,85 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 		if len(p.streams) > 0 {
 			stream = p.streams[len(p.streams)-1]
 			p.streams = p.streams[:len(p.streams)-1]
-			log.Debug("🔍 Retrieved stream from pool, verifying...")
+			log.Debugf("🔍 Retrieved stream from pool, verifying... [slot: %s, stream: %v]", slot.id, stream.ID())
 
 			if stream.Conn().ID() != SequencerHostConn.ID().String() {
-				log.Debug("⚠️ Found stale stream, closing")
+				log.Debugf("⚠️ Found stale stream, closing [slot: %s, stream: %v]", slot.id, stream.ID())
 				stream.Close()
 				return fmt.Errorf("stale stream detected")
 			}
 
 			if err := p.pingStream(stream); err != nil {
-				log.Debug("💔 Stream health check failed, closing")
+				log.Debugf("💔 Stream health check failed, closing [slot: %s, stream: %v]", slot.id, stream.ID())
 				stream.Close()
 				return fmt.Errorf("stream health check failed: %v", err)
 			}
 
-			log.Debug("✨ Retrieved healthy stream from pool")
+			log.Debugf("✨ Retrieved healthy stream from pool [slot: %s, stream: %v]", slot.id, stream.ID())
 			return nil
 		}
 
-		log.Debug("🏗️ Creating new stream")
+		log.Debugf("🏗️ Creating new stream [slot: %s]", slot.id)
 		newStream, err := p.createNewStreamWithRetry()
 		if err != nil {
-			log.Debugf("❌ Failed to create new stream: %v", err)
+			log.Debugf("❌ Failed to create new stream: %v [slot: %s]", err, slot.id)
 			return fmt.Errorf("failed to create new stream: %v", err)
 		}
 		stream = newStream
-		log.Debug("✅ Created new stream successfully")
+		log.Debugf("✅ Created new stream successfully [slot: %s, stream: %v]", slot.id, stream.ID())
 		return nil
 	}, b)
 
 	if err != nil {
-		log.Errorf("❌ Stream acquisition failed after %d attempts: %v", attempt, err)
+		// Release the request queue slot on error
+		<-p.reqQueue
+		log.Debugf("♻️ Released request queue slot due to error [slot: %s, duration: %v]", slot.id, time.Since(slot.createdAt))
+		log.Errorf("❌ Stream acquisition failed after %d attempts: %v [slot: %s]", attempt, err, slot.id)
 		return nil, fmt.Errorf("failed to acquire stream after retries: %w", err)
 	}
 
-	log.Debug("🎉 Successfully acquired stream")
+	log.Debugf("🎉 Successfully acquired stream [slot: %s, stream: %v]", slot.id, stream.ID())
 	return stream, nil
 }
 
 func (p *StreamPool) ReturnStream(stream network.Stream) {
+	if stream == nil {
+		log.Warn("Attempted to return nil stream to pool")
+		return
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// Get the request slot that's being released
+	slot := <-p.reqQueue
+	if slot == nil {
+		log.Error("Received nil request slot during stream return")
+		return
+	}
+
 	// Don't exceed pool size
 	if len(p.streams) >= p.maxSize {
-		log.Debugf("Stream pool is full, closing stream: %v", stream.ID())
+		log.Debugf("Stream pool is full (%d/%d), closing stream: %v [slot: %s]", len(p.streams), p.maxSize, stream.ID(), slot.id)
+		if err := stream.Reset(); err != nil {
+			log.Warnf("Error resetting stream: %v [slot: %s]", err, slot.id)
+		}
 		stream.Close()
-		return
+	} else {
+		// Optional: verify stream is still healthy before returning
+		if err := p.pingStream(stream); err != nil {
+			log.Debugf("Stream failed health check on return, closing: %v [slot: %s]", stream.ID(), slot.id)
+			if err := stream.Reset(); err != nil {
+				log.Warnf("Error resetting stream: %v [slot: %s]", err, slot.id)
+			}
+			stream.Close()
+		} else {
+			p.streams = append(p.streams, stream)
+			log.Debugf("Stream returned to pool: %v (pool size: %d/%d) [slot: %s]", stream.ID(), len(p.streams), p.maxSize, slot.id)
+		}
 	}
 
-	// Optional: verify stream is still healthy before returning
-	if err := p.pingStream(stream); err != nil {
-		log.Debugf("Stream failed health check on return, closing: %v", stream.ID())
-		stream.Close()
-		return
-	}
-
-	p.streams = append(p.streams, stream)
-	log.Debugf("Stream returned to pool: %v", stream.ID())
-	// Note: don't decrease activeCount here as stream is still in pool
+	log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", slot.id, time.Since(slot.createdAt))
 }
 
 func (p *StreamPool) pingStream(stream network.Stream) error {
