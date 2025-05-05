@@ -225,7 +225,10 @@ func StartConnectionRefreshLoop(ctx context.Context) {
 				filled := 0
 				for i := 0; i < cap(pool.reqQueue); i++ {
 					select {
-					case pool.reqQueue <- struct{}{}:
+					case pool.reqQueue <- &reqSlot{
+						id:        fmt.Sprintf("refresh-check-%d", i),
+						createdAt: time.Now(),
+					}:
 						filled++
 					default:
 						log.Infof("🔴 Found %d/%d active requests", cap(pool.reqQueue)-filled, cap(pool.reqQueue))
