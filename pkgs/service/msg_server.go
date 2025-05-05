@@ -191,10 +191,6 @@ func (s *server) writeToStream(data []byte, submissionId string, submission *pkg
 				log.Infof("⏰ Succesful defer for snapshot submission (Project: %s, Epoch: %d) with ID: %s",
 					submission.Request.ProjectId, submission.Request.EpochId, submissionId)
 			}
-			// Get metrics and increment success counter
-			if metrics := s.getOrCreateEpochMetrics(submission.Request.EpochId); metrics != nil {
-				metrics.succeeded.Add(1)
-			}
 		}
 		pool.ReturnStream(stream)
 	}()
