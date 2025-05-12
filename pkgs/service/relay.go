@@ -223,6 +223,7 @@ func StartConnectionRefreshLoop(ctx context.Context) {
 			log.Info("⏳ Waiting for in-flight requests to complete")
 			err := backoff.Retry(func() error {
 				filled := 0
+				// First try to get all slots to check for active requests
 				for i := 0; i < cap(pool.reqQueue); i++ {
 					select {
 					case pool.reqQueue <- &reqSlot{
@@ -231,12 +232,25 @@ func StartConnectionRefreshLoop(ctx context.Context) {
 					}:
 						filled++
 					default:
-						log.Infof("🔴 Found %d/%d active requests", cap(pool.reqQueue)-filled, cap(pool.reqQueue))
+						// If we can't fill the queue, there are active requests
+						activeRequests := cap(pool.reqQueue) - filled
+						log.Infof("🔴 Found %d active requests", activeRequests)
+
+						// Return all the tokens we just acquired
+						for j := 0; j < filled; j++ {
+							<-pool.reqQueue
+						}
+
+						// Wait for active requests to complete
+						time.Sleep(1 * time.Second)
 						return fmt.Errorf("requests still in flight")
 					}
 				}
+
+				// If we got here, we successfully filled the queue
 				log.Info("✅ All request slots available - proceeding with refresh")
-				// Return tokens
+
+				// Return all tokens before proceeding
 				for i := 0; i < filled; i++ {
 					<-pool.reqQueue
 				}
@@ -245,6 +259,8 @@ func StartConnectionRefreshLoop(ctx context.Context) {
 
 			if err != nil {
 				log.Warnf("⚠️ Proceeding with refresh despite active requests: %v", err)
+				// Give a small grace period for any remaining requests
+				time.Sleep(2 * time.Second)
 			}
 
 			log.Info("🔌 Refreshing connection to sequencer")
