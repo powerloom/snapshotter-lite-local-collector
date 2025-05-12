@@ -147,7 +147,9 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 			p.streams = p.streams[:len(p.streams)-1]
 			log.Debugf("🔍 Retrieved stream from pool, verifying... [slot: %s, stream: %v]", slot.id, stream.ID())
 
-			if stream.Conn().ID() != SequencerHostConn.ID().String() {
+			// Check if stream's connection is still alive and connected to sequencer
+			if stream.Conn() == nil || stream.Conn().IsClosed() ||
+				stream.Conn().RemotePeer() != p.sequencerID {
 				log.Debugf("⚠️ Found stale stream, closing [slot: %s, stream: %v]", slot.id, stream.ID())
 				stream.Close()
 				return fmt.Errorf("stale stream detected")
@@ -210,8 +212,14 @@ func (p *StreamPool) ReturnStream(stream network.Stream) {
 		}
 		stream.Close()
 	} else {
-		// Optional: verify stream is still healthy before returning
-		if err := p.pingStream(stream); err != nil {
+		// Verify stream is still healthy and connected to correct sequencer before returning
+		if stream.Conn() == nil || stream.Conn().IsClosed() || stream.Conn().RemotePeer() != p.sequencerID {
+			log.Debugf("Stream failed validation on return, closing: %v [slot: %s]", stream.ID(), slot.id)
+			if err := stream.Reset(); err != nil {
+				log.Warnf("Error resetting stream: %v [slot: %s]", err, slot.id)
+			}
+			stream.Close()
+		} else if err := p.pingStream(stream); err != nil {
 			log.Debugf("Stream failed health check on return, closing: %v [slot: %s]", stream.ID(), slot.id)
 			if err := stream.Reset(); err != nil {
 				log.Warnf("Error resetting stream: %v [slot: %s]", err, slot.id)
@@ -237,10 +245,7 @@ func (p *StreamPool) pingStream(stream network.Stream) error {
 	}
 	defer stream.SetDeadline(time.Time{})
 
-	if stream.Conn() == nil || stream.Conn().IsClosed() {
-		return fmt.Errorf("stream is not alive")
-	}
-
+	// Only check if stream is responsive, connection validation is done by caller
 	return nil
 }
 
