@@ -143,7 +143,7 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 			p.streams = p.streams[:len(p.streams)-1]
 			log.Debugf("🔍 Retrieved stream from pool, verifying... [slot: %s, stream: %v]", slot.id, stream.ID())
 
-			if stream.Conn().ID() != SequencerHostConn.ID().String() {
+			if stream.Conn().RemotePeer() != SequencerID {
 				log.Debugf("⚠️ Found stale stream, closing [slot: %s, stream: %v]", slot.id, stream.ID())
 				stream.Close()
 				return fmt.Errorf("stale stream detected")
