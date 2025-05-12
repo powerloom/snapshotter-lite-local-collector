@@ -143,7 +143,7 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 			p.streams = p.streams[:len(p.streams)-1]
 			log.Debugf("🔍 Retrieved stream from pool, verifying... [slot: %s, stream: %v]", slot.id, stream.ID())
 
-			if stream.Conn().RemotePeer() != SequencerID {
+			if stream.Conn() == nil || stream.Conn().IsClosed() {
 				log.Debugf("⚠️ Found stale stream, closing [slot: %s, stream: %v]", slot.id, stream.ID())
 				stream.Close()
 				return fmt.Errorf("stale stream detected")
@@ -206,17 +206,10 @@ func (p *StreamPool) ReturnStream(stream network.Stream) {
 		}
 		stream.Close()
 	} else {
-		// Optional: verify stream is still healthy before returning
-		if err := p.pingStream(stream); err != nil {
-			log.Debugf("Stream failed health check on return, closing: %v [slot: %s]", stream.ID(), slot.id)
-			if err := stream.Reset(); err != nil {
-				log.Warnf("Error resetting stream: %v [slot: %s]", err, slot.id)
-			}
-			stream.Close()
-		} else {
-			p.streams = append(p.streams, stream)
-			log.Debugf("Stream returned to pool: %v (pool size: %d/%d) [slot: %s]", stream.ID(), len(p.streams), p.maxSize, slot.id)
-		}
+		// return stream to pool and let the next request acquire it and check health
+		p.streams = append(p.streams, stream)
+		log.Debugf("Stream returned to pool: %v (pool size: %d/%d) [slot: %s]", stream.ID(), len(p.streams), p.maxSize, slot.id)
+
 	}
 
 	log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", slot.id, time.Since(slot.createdAt))
