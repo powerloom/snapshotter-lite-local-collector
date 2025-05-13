@@ -29,6 +29,12 @@ type StreamPool struct {
 	activeOps   sync.WaitGroup // Track active operations
 }
 
+// streamWithSlot bundles a stream with its request slot
+type streamWithSlot struct {
+	stream network.Stream
+	slot   *reqSlot
+}
+
 // reqSlot represents a request queue slot with an identifier
 type reqSlot struct {
 	id        string
@@ -100,7 +106,7 @@ func GetLibp2pStreamPool() *StreamPool {
 	return libp2pStreamPool
 }
 
-func (p *StreamPool) GetStream() (network.Stream, error) {
+func (p *StreamPool) GetStream() (*streamWithSlot, error) {
 	log.Debug("🎯 Attempting to acquire stream")
 
 	// Create a new request slot with identifier
@@ -183,40 +189,40 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 	}
 
 	log.Debugf("🎉 Successfully acquired stream [slot: %s, stream: %v]", slot.id, stream.ID())
-	return stream, nil
+	return &streamWithSlot{stream: stream, slot: slot}, nil
 }
 
-func (p *StreamPool) ReturnStream(stream network.Stream) {
-	if stream == nil {
-		log.Warn("Attempted to return nil stream to pool")
+// ReleaseStream handles cleanup of both stream and slot
+func (p *StreamPool) ReleaseStream(sw *streamWithSlot, failed bool) {
+	if sw == nil {
 		return
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Get the request slot that's being released
-	slot := <-p.reqQueue
-	if slot == nil {
-		log.Error("Received nil request slot during stream return")
-		return
-	}
-
-	// Don't exceed pool size
-	if len(p.streams) >= p.maxSize {
-		log.Debugf("Stream pool is full (%d/%d), closing stream: %v [slot: %s]", len(p.streams), p.maxSize, stream.ID(), slot.id)
-		if err := stream.Reset(); err != nil {
-			log.Warnf("Error resetting stream: %v [slot: %s]", err, slot.id)
+	if failed {
+		// On failure, cleanup the stream
+		if sw.stream != nil {
+			sw.stream.Reset()
+			sw.stream.Close()
 		}
-		stream.Close()
 	} else {
-		// return stream to pool and let the next request acquire it and check health
-		p.streams = append(p.streams, stream)
-		log.Debugf("Stream returned to pool: %v (pool size: %d/%d) [slot: %s]", stream.ID(), len(p.streams), p.maxSize, slot.id)
-
+		// On success, return stream to pool
+		p.mu.Lock()
+		if len(p.streams) >= p.maxSize {
+			// Pool full, close the stream
+			sw.stream.Reset()
+			sw.stream.Close()
+		} else {
+			p.streams = append(p.streams, sw.stream)
+			log.Debugf("Stream returned to pool: %v (pool size: %d/%d)", sw.stream.ID(), len(p.streams), p.maxSize)
+		}
+		p.mu.Unlock()
 	}
 
-	log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", slot.id, time.Since(slot.createdAt))
+	// Always release the slot
+	if sw.slot != nil {
+		<-p.reqQueue
+		log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", sw.slot.id, time.Since(sw.slot.createdAt))
+	}
 }
 
 func (p *StreamPool) pingStream(stream network.Stream) error {
