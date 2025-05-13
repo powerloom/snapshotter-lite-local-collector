@@ -14,7 +14,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
-	"github.com/libp2p/go-libp2p/core/network"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -148,7 +147,7 @@ func (s *server) writeToStream(data []byte, submissionId string, submission *pkg
 	b := backoff.NewExponentialBackOff()
 	b.MaxElapsedTime = 30 * time.Second
 
-	var stream network.Stream
+	var sw *streamWithSlot
 	attempt := 0
 	err := backoff.Retry(func() error {
 		attempt++
@@ -162,7 +161,7 @@ func (s *server) writeToStream(data []byte, submissionId string, submission *pkg
 			log.Debugf("❌ Non-retriable error getting stream: %v", err)
 			return backoff.Permanent(err)
 		}
-		stream = s
+		sw = s
 		log.Debug("✅ Successfully acquired stream")
 		return nil
 	}, b)
@@ -172,55 +171,31 @@ func (s *server) writeToStream(data []byte, submissionId string, submission *pkg
 	}
 
 	// Set write deadline before attempting write
-	if err := stream.SetWriteDeadline(time.Now().Add(config.SettingsObj.StreamWriteTimeout)); err != nil {
-		// First cleanup stream
-		stream.Reset()
-		stream.Close()
-		// Then release slot
-		slot := <-pool.reqQueue
-		if slot != nil {
-			log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", slot.id, time.Since(slot.createdAt))
-		}
+	if err := sw.stream.SetWriteDeadline(time.Now().Add(config.SettingsObj.StreamWriteTimeout)); err != nil {
+		// First cleanup stream, then release slot
+		pool.ReleaseStream(sw, true)
 		return fmt.Errorf("❌ Failed to set write deadline for submission (Project: %s, Epoch: %d) with ID: %s: %w",
 			submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
 	}
 
 	// Attempt the write
-	n, err := stream.Write(data)
+	n, err := sw.stream.Write(data)
 	if err != nil {
-		// First cleanup stream
-		stream.Reset()
-		stream.Close()
-		// Then release slot
-		slot := <-pool.reqQueue
-		if slot != nil {
-			log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", slot.id, time.Since(slot.createdAt))
-		}
+		// First cleanup stream, then release slot
+		pool.ReleaseStream(sw, true)
 		return fmt.Errorf("❌ Write failed for submission (Project: %s, Epoch: %d) with ID: %s: %w",
 			submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
 	}
 
 	if n != len(data) {
-		// First cleanup stream
-		stream.Reset()
-		stream.Close()
-		// Then release slot
-		slot := <-pool.reqQueue
-		if slot != nil {
-			log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", slot.id, time.Since(slot.createdAt))
-		}
+		// First cleanup stream, then release slot
+		pool.ReleaseStream(sw, true)
 		return fmt.Errorf("❌ Incomplete write: %d/%d bytes for submission (Project: %s, Epoch: %d) with ID: %s",
 			n, len(data), submission.Request.ProjectId, submission.Request.EpochId, submissionId)
 	}
 
-	// On success:
-	// 1. Return stream to pool
-	pool.ReturnStream(stream)
-	// 2. Release slot
-	slot := <-pool.reqQueue
-	if slot != nil {
-		log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", slot.id, time.Since(slot.createdAt))
-	}
+	// Return stream to pool and release slot
+	pool.ReleaseStream(sw, false)
 
 	if submission.Request.EpochId == 0 {
 		log.Infof("✅ Successfully wrote to stream for SIMULATION snapshot submission (Project: %s, Epoch: %d) with ID: %s",
