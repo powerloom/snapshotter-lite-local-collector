@@ -143,7 +143,7 @@ func (p *StreamPool) GetStream() (network.Stream, error) {
 			p.streams = p.streams[:len(p.streams)-1]
 			log.Debugf("🔍 Retrieved stream from pool, verifying... [slot: %s, stream: %v]", slot.id, stream.ID())
 
-			if stream.Conn() == nil || stream.Conn().IsClosed() || stream.Conn().RemotePeer() != p.sequencerID {
+			if stream.Conn() == nil || stream.Conn().IsClosed() {
 				log.Debugf("⚠️ Found stale stream, closing [slot: %s, stream: %v]", slot.id, stream.ID())
 				stream.Close()
 				return fmt.Errorf("stale stream detected")
@@ -252,9 +252,6 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 			return fmt.Errorf("fatal: connection to sequencer lost")
 		}
 
-		// Update pool's sequencer ID to match current connection
-		p.sequencerID = seqId
-
 		stream, err = p.createStream()
 		if err != nil {
 			return fmt.Errorf("stream creation failed: %w", err)
@@ -323,12 +320,6 @@ func RebuildStreamPool() error {
 		return fmt.Errorf("cannot rebuild: stream pool not initialized")
 	}
 
-	// Get current sequencer ID
-	_, seqId, err := GetSequencerConnection()
-	if err != nil {
-		return fmt.Errorf("cannot rebuild: failed to get current sequencer ID: %w", err)
-	}
-
 	// Close all existing streams
 	libp2pStreamPool.mu.Lock()
 	for _, stream := range libp2pStreamPool.streams {
@@ -337,10 +328,9 @@ func RebuildStreamPool() error {
 		}
 	}
 
-	// Reset the pool with same capacity and update sequencer ID
+	// Reset the pool with same capacity
 	maxSize := libp2pStreamPool.maxSize
 	libp2pStreamPool.streams = make([]network.Stream, 0, maxSize)
-	libp2pStreamPool.sequencerID = seqId // Update the sequencer ID
 	libp2pStreamPool.mu.Unlock()
 
 	log.Info("Stream pool rebuilt after reconnection")

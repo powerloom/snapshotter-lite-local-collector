@@ -171,46 +171,57 @@ func (s *server) writeToStream(data []byte, submissionId string, submission *pkg
 		return err
 	}
 
-	success := false
-	defer func() {
-		if !success {
-			if submission.Request.EpochId == 0 {
-				log.Errorf("❌ Failed defer for SIMULATION snapshot submission (Project: %s, Epoch: %d) with ID: %s: %v",
-					submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
-			} else {
-				log.Errorf("❌ Failed defer for snapshot submission (Project: %s, Epoch: %d) with ID: %s: %v",
-					submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
-			}
-			stream.Reset()
-			stream.Close()
-		} else {
-			if submission.Request.EpochId == 0 {
-				log.Infof("⏰ Succesful defer for SIMULATION snapshot submission (Project: %s, Epoch: %d) with ID: %s",
-					submission.Request.ProjectId, submission.Request.EpochId, submissionId)
-			} else {
-				log.Infof("⏰ Succesful defer for snapshot submission (Project: %s, Epoch: %d) with ID: %s",
-					submission.Request.ProjectId, submission.Request.EpochId, submissionId)
-			}
-		}
-		pool.ReturnStream(stream)
-	}()
-
+	// Set write deadline before attempting write
 	if err := stream.SetWriteDeadline(time.Now().Add(config.SettingsObj.StreamWriteTimeout)); err != nil {
+		// First cleanup stream
+		stream.Reset()
+		stream.Close()
+		// Then release slot
+		slot := <-pool.reqQueue
+		if slot != nil {
+			log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", slot.id, time.Since(slot.createdAt))
+		}
 		return fmt.Errorf("❌ Failed to set write deadline for submission (Project: %s, Epoch: %d) with ID: %s: %w",
 			submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
 	}
 
+	// Attempt the write
 	n, err := stream.Write(data)
 	if err != nil {
+		// First cleanup stream
+		stream.Reset()
+		stream.Close()
+		// Then release slot
+		slot := <-pool.reqQueue
+		if slot != nil {
+			log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", slot.id, time.Since(slot.createdAt))
+		}
 		return fmt.Errorf("❌ Write failed for submission (Project: %s, Epoch: %d) with ID: %s: %w",
 			submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
 	}
+
 	if n != len(data) {
+		// First cleanup stream
+		stream.Reset()
+		stream.Close()
+		// Then release slot
+		slot := <-pool.reqQueue
+		if slot != nil {
+			log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", slot.id, time.Since(slot.createdAt))
+		}
 		return fmt.Errorf("❌ Incomplete write: %d/%d bytes for submission (Project: %s, Epoch: %d) with ID: %s",
 			n, len(data), submission.Request.ProjectId, submission.Request.EpochId, submissionId)
 	}
 
-	success = true
+	// On success:
+	// 1. Return stream to pool
+	pool.ReturnStream(stream)
+	// 2. Release slot
+	slot := <-pool.reqQueue
+	if slot != nil {
+		log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", slot.id, time.Since(slot.createdAt))
+	}
+
 	if submission.Request.EpochId == 0 {
 		log.Infof("✅ Successfully wrote to stream for SIMULATION snapshot submission (Project: %s, Epoch: %d) with ID: %s",
 			submission.Request.ProjectId, submission.Request.EpochId, submissionId)
