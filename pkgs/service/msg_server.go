@@ -7,10 +7,12 @@ import (
 	"net"
 	"proto-snapshot-server/config"
 	"proto-snapshot-server/pkgs"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -97,13 +99,35 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	metrics := s.getOrCreateEpochMetrics(submission.Request.EpochId)
 	metrics.received.Add(1)
 
-	s.writeSemaphore <- struct{}{}
-	go func() {
-		defer func() { <-s.writeSemaphore }()
-		if err := s.writeToStream(submissionBytes, submissionId.String(), submission); err != nil {
-			log.Errorf("❌ Stream write failed for %s: %v", submissionId.String(), err)
+	// Single write attempt with backoff
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = 30 * time.Second
+
+	err = backoff.Retry(func() error {
+		// First get writeSemaphore for GRPC concurrency control
+		select {
+		case s.writeSemaphore <- struct{}{}:
+			defer func() { <-s.writeSemaphore }()
+		default:
+			return fmt.Errorf("server at capacity") // Non-retriable
 		}
-	}()
+
+		// Then try to write
+		if err := s.writeToStream(submissionBytes, submissionId.String(), submission); err != nil {
+			if strings.Contains(err.Error(), "request queue full") ||
+				strings.Contains(err.Error(), "connection refresh in progress") {
+				return err // Retriable
+			}
+			return backoff.Permanent(err)
+		}
+		metrics.succeeded.Add(1)
+		return nil
+	}, b)
+
+	if err != nil {
+		log.Errorf("❌ Failed to submit snapshot after retries: %v", err)
+		return &pkgs.SubmissionResponse{Message: "Failure"}, err
+	}
 
 	return &pkgs.SubmissionResponse{Message: "Success"}, nil
 }
@@ -113,60 +137,66 @@ func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotS
 }
 
 func (s *server) writeToStream(data []byte, submissionId string, submission *pkgs.SnapshotSubmission) error {
+	log.Debugf("📝 Starting stream write for submission %s", submissionId)
+
 	pool := GetLibp2pStreamPool()
 	if pool == nil {
-		return fmt.Errorf("stream pool not available")
+		return fmt.Errorf("❌ stream pool not available")
 	}
 
-	stream, err := pool.GetStream()
-	if err != nil {
-		return fmt.Errorf("failed to get stream: %w", err)
-	}
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = 30 * time.Second
 
-	success := false
-	defer func() {
-		if !success {
-			if submission.Request.EpochId == 0 {
-				log.Errorf("❌ Failed defer for SIMULATION snapshot submission (Project: %s, Epoch: %d) with ID: %s: %v",
-					submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
-			} else {
-				log.Errorf("❌ Failed defer for snapshot submission (Project: %s, Epoch: %d) with ID: %s: %v",
-					submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
+	var sw *streamWithSlot
+	attempt := 0
+	err := backoff.Retry(func() error {
+		attempt++
+		log.Debugf("🔄 Attempting to get stream (attempt %d)", attempt)
+		s, err := pool.GetStream()
+		if err != nil {
+			if strings.Contains(err.Error(), "connection refresh in progress") {
+				log.Debugf("⏳ Waiting for connection refresh to complete (attempt %d)", attempt)
+				return err
 			}
-			stream.Reset()
-			stream.Close()
-		} else {
-			if submission.Request.EpochId == 0 {
-				log.Infof("⏰ Succesful defer for SIMULATION snapshot submission (Project: %s, Epoch: %d) with ID: %s",
-					submission.Request.ProjectId, submission.Request.EpochId, submissionId)
-			} else {
-				log.Infof("⏰ Succesful defer for snapshot submission (Project: %s, Epoch: %d) with ID: %s",
-					submission.Request.ProjectId, submission.Request.EpochId, submissionId)
-			}
-			// Get metrics and increment success counter
-			if metrics := s.getOrCreateEpochMetrics(submission.Request.EpochId); metrics != nil {
-				metrics.succeeded.Add(1)
-			}
+			log.Debugf("❌ Non-retriable error getting stream: %v", err)
+			return backoff.Permanent(err)
 		}
-		pool.ReturnStream(stream)
-	}()
+		sw = s
+		log.Debug("✅ Successfully acquired stream")
+		return nil
+	}, b)
 
-	if err := stream.SetWriteDeadline(time.Now().Add(config.SettingsObj.StreamWriteTimeout)); err != nil {
+	if err != nil {
+		return err
+	}
+
+	// Set write deadline before attempting write
+	if err := sw.stream.SetWriteDeadline(time.Now().Add(config.SettingsObj.StreamWriteTimeout)); err != nil {
+		// First cleanup stream, then release slot
+		pool.ReleaseStream(sw, true)
 		return fmt.Errorf("❌ Failed to set write deadline for submission (Project: %s, Epoch: %d) with ID: %s: %w",
 			submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
 	}
 
-	n, err := stream.Write(data)
+	// Attempt the write
+	n, err := sw.stream.Write(data)
 	if err != nil {
+		// First cleanup stream, then release slot
+		pool.ReleaseStream(sw, true)
 		return fmt.Errorf("❌ Write failed for submission (Project: %s, Epoch: %d) with ID: %s: %w",
 			submission.Request.ProjectId, submission.Request.EpochId, submissionId, err)
 	}
+
 	if n != len(data) {
+		// First cleanup stream, then release slot
+		pool.ReleaseStream(sw, true)
 		return fmt.Errorf("❌ Incomplete write: %d/%d bytes for submission (Project: %s, Epoch: %d) with ID: %s",
 			n, len(data), submission.Request.ProjectId, submission.Request.EpochId, submissionId)
 	}
 
-	success = true
+	// Return stream to pool and release slot
+	pool.ReleaseStream(sw, false)
+
 	if submission.Request.EpochId == 0 {
 		log.Infof("✅ Successfully wrote to stream for SIMULATION snapshot submission (Project: %s, Epoch: %d) with ID: %s",
 			submission.Request.ProjectId, submission.Request.EpochId, submissionId)
