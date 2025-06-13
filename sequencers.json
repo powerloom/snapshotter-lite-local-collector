@@ -14,13 +14,13 @@
   {
     "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "maddr": "/dns/devnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "dataMarketAddress": "0x884A4a96CA2D493F3Cb18fBf9Bed69301d01Bf34",
+    "dataMarketAddress": "0xC84beA7CbF6D9C439273Cc921637814F9C140281",
     "environment": "devnet-uniswapv3-edge"
   },
   {
     "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "maddr": "/dns/devnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "dataMarketAddress": "0xC2Ec69ffB39e8c29Fe0fB3673939A978cFB6803E",
+    "dataMarketAddress": "0xe948156cbd2b1E95BEA8b96660CdeB8dCC939Dc3",
     "environment": "devnet-base-uniswapv3-edge"
   },
   {
