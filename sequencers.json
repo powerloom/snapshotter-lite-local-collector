@@ -20,7 +20,7 @@
   {
     "id": "QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
     "maddr": "/dns/devnet-proto-snapshot-listener.aws2.powerloom.io/tcp/9100/p2p/QmbWC2TKXDWnYB1picmYwAMRUz7ACXLXDWyLibjHnaRyoN",
-    "dataMarketAddress": "0x1fA0b177DA255eD72362865F424A6e4d597f3714",
+    "dataMarketAddress": "0x283e92Aa8510160A73A12948e8c74109b1f80eDc",
     "environment": "devnet-base-uniswapv3-edge"
   },
   {
