@@ -14,6 +14,7 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -30,6 +31,7 @@ type server struct {
 	writeSemaphore chan struct{} // Control concurrent writes
 	metrics        *sync.Map     // map[uint64]*epochMetrics
 	currentEpoch   atomic.Uint64
+	pubsub         *pubsub.PubSub
 }
 
 var _ pkgs.SubmissionServer = &server{}
@@ -47,6 +49,7 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 	server := &server{
 		writeSemaphore: make(chan struct{}, config.SettingsObj.MaxConcurrentWrites),
 		metrics:        &sync.Map{},
+		pubsub:         gossiper,
 	}
 
 	// Start periodic metrics logging with 15 second interval

@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"proto-snapshot-server/config"
 	"sync"
 
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	log "github.com/sirupsen/logrus"
@@ -22,6 +24,7 @@ type ServiceDependencies struct {
 var (
 	deps       ServiceDependencies
 	grpcServer *grpc.Server
+	gossiper   *pubsub.PubSub
 )
 
 func InitializeService() error {
@@ -49,6 +52,12 @@ func InitializeService() error {
 
 	deps.hostConn = SequencerHostConn
 	deps.sequencerID = SequencerID
+
+	var err error
+	gossiper, err = pubsub.NewGossipSub(context.Background(), deps.hostConn)
+	if err != nil {
+		return fmt.Errorf("failed to create pubsub: %w", err)
+	}
 
 	// Initialize stream pool
 	if err := InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize); err != nil {
