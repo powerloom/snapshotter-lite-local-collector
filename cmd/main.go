@@ -14,11 +14,11 @@ import (
 )
 
 func main() {
-	// Initiate logger
-	helpers.InitLogger()
-
 	// Load the config object
 	config.LoadConfig()
+
+	// Initiate logger
+	helpers.InitLogger()
 
 	// Initialize the service
 	if err := service.InitializeService(); err != nil {
