@@ -179,7 +179,17 @@ func (s *server) writeToStream(data []byte, submissionId string, submission *pkg
 	}
 
 	// Attempt the write
+	log.WithFields(log.Fields{
+		"submissionID": submissionId,
+		"streamID":     sw.stream.ID(),
+	}).Trace("Attempting stream write")
 	n, err := sw.stream.Write(data)
+	log.WithFields(log.Fields{
+		"submissionID": submissionId,
+		"streamID":     sw.stream.ID(),
+		"bytesWritten": n,
+		"error":        err,
+	}).Trace("Stream write completed")
 	if err != nil {
 		// First cleanup stream, then release slot
 		pool.ReleaseStream(sw, true)
