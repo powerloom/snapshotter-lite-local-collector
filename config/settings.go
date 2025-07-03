@@ -69,7 +69,7 @@ func LoadConfig() {
 	config.StreamHealthCheckTimeout = time.Duration(getEnvAsInt("STREAM_HEALTH_CHECK_TIMEOUT_MS", 5000)) * time.Millisecond
 	config.StreamWriteTimeout = time.Duration(getEnvAsInt("STREAM_WRITE_TIMEOUT_MS", 5000)) * time.Millisecond
 	config.MaxWriteRetries = getEnvAsInt("MAX_WRITE_RETRIES", 5)
-	config.MaxConcurrentWrites = getEnvAsInt("MAX_CONCURRENT_WRITES", 250)
+	config.MaxConcurrentWrites = getEnvAsInt("MAX_CONCURRENT_WRITES", 100)
 	config.MaxStreamQueueSize = getEnvAsInt("MAX_STREAM_QUEUE_SIZE", 1000)
 	config.WorkerPoolSize = getEnvAsInt("WORKER_POOL_SIZE", 250)
 
