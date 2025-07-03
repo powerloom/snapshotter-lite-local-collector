@@ -208,9 +208,9 @@ func (p *StreamPool) ReleaseStream(sw *streamWithSlot, failed bool) {
 		// On success, return stream to pool
 		p.mu.Lock()
 		if len(p.streams) >= p.maxSize {
-			// Pool full, close the stream
-			sw.stream.Reset()
+			// Pool full, gracefully close the stream
 			sw.stream.Close()
+			log.Debugf("Stream gracefully closed as pool is full: %v", sw.stream.ID())
 		} else {
 			p.streams = append(p.streams, sw.stream)
 			log.Debugf("Stream returned to pool: %v (pool size: %d/%d)", sw.stream.ID(), len(p.streams), p.maxSize)
