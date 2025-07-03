@@ -1,12 +1,11 @@
 package helpers
 
 import (
-	"fmt"
 	log "github.com/sirupsen/logrus"
 	"github.com/sirupsen/logrus/hooks/writer"
 	"io"
 	"os"
-	"strconv"
+	"proto-snapshot-server/config"
 )
 
 func InitLogger() {
@@ -31,18 +30,15 @@ func InitLogger() {
 			log.DebugLevel,
 		},
 	})
-	if len(os.Args) < 2 {
-		fmt.Println("Pass loglevel as an argument if you don't want default(INFO) to be set.")
-		fmt.Println("Values to be passed for logLevel: ERROR(2),INFO(4),DEBUG(5)")
-		log.SetLevel(log.DebugLevel)
-	} else {
-		logLevel, err := strconv.ParseUint(os.Args[1], 10, 32)
-		if err != nil || logLevel > 6 {
-			log.SetLevel(log.DebugLevel) //TODO: Change default level to error
-		} else {
-			//TODO: Need to come up with approach to dynamically update logLevel.
-			log.SetLevel(log.Level(logLevel))
-		}
+
+	// Set log level based on config.SettingsObj.LogLevel
+	lvl, err := log.ParseLevel(config.SettingsObj.LogLevel)
+	if err != nil {
+		log.Warnf("Invalid log level '%s' from config, defaulting to 'info'", config.SettingsObj.LogLevel)
+		lvl = log.InfoLevel
 	}
+	log.SetLevel(lvl)
+	log.Infof("Log level set to '%s'", lvl.String())
+
 	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
 }

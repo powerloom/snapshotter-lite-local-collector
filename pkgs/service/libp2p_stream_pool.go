@@ -65,8 +65,12 @@ func InitLibp2pStreamPool(maxSize int) error {
 	// Verify connection state
 	_, seqId, err := GetSequencerConnection()
 	if err != nil {
+		removeHealthFile()
 		return fmt.Errorf("cannot initialize pool: %w", err)
 	}
+
+	// Connection successful, create health file
+	createHealthFile()
 
 	pool := &StreamPool{
 		streams:     make([]network.Stream, 0, maxSize),
@@ -204,9 +208,9 @@ func (p *StreamPool) ReleaseStream(sw *streamWithSlot, failed bool) {
 		// On success, return stream to pool
 		p.mu.Lock()
 		if len(p.streams) >= p.maxSize {
-			// Pool full, close the stream
-			sw.stream.Reset()
+			// Pool full, gracefully close the stream
 			sw.stream.Close()
+			log.Debugf("Stream gracefully closed as pool is full: %v", sw.stream.ID())
 		} else {
 			p.streams = append(p.streams, sw.stream)
 			log.Debugf("Stream returned to pool: %v (pool size: %d/%d)", sw.stream.ID(), len(p.streams), p.maxSize)
@@ -224,14 +228,13 @@ func (p *StreamPool) ReleaseStream(sw *streamWithSlot, failed bool) {
 func (p *StreamPool) pingStream(stream network.Stream) error {
 	timeout := config.SettingsObj.StreamHealthCheckTimeout
 	if timeout == 0 {
-		timeout = 2 * time.Second // fallback default
+		timeout = 2 * time.Second
 	}
 
 	if err := stream.SetDeadline(time.Now().Add(timeout)); err != nil {
-		log.Debugf("Failed to set stream deadline: %v", err)
 		return fmt.Errorf("failed to set deadline: %w", err)
 	}
-	defer stream.SetDeadline(time.Time{}) // Clear deadline
+	defer stream.SetDeadline(time.Time{})
 
 	// Simply check if the connection is closed
 	if stream.Conn() == nil || stream.Conn().IsClosed() {
