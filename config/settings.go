@@ -11,6 +11,7 @@ import (
 var SettingsObj *Settings
 
 type Settings struct {
+	LogLevel               string
 	SequencerID            string
 	RelayerRendezvousPoint string
 	ClientRendezvousPoint  string
@@ -71,6 +72,9 @@ func LoadConfig() {
 	config.MaxConcurrentWrites = getEnvAsInt("MAX_CONCURRENT_WRITES", 250)
 	config.MaxStreamQueueSize = getEnvAsInt("MAX_STREAM_QUEUE_SIZE", 1000)
 	config.WorkerPoolSize = getEnvAsInt("WORKER_POOL_SIZE", 250)
+
+	// Add log level setting (default "info")
+	config.LogLevel = getEnvWithDefault("LOG_LEVEL", "info")
 
 	// Add connection refresh interval setting (default 5 minutes)
 	config.ConnectionRefreshInterval = time.Duration(getEnvAsInt("CONNECTION_REFRESH_INTERVAL_SEC", 300)) * time.Second
