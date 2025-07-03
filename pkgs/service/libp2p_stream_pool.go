@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"proto-snapshot-server/config"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -21,12 +22,13 @@ var (
 
 // StreamPool manages a pool of libp2p network streams
 type StreamPool struct {
-	mu          sync.Mutex
-	streams     []network.Stream
-	maxSize     int
-	sequencerID peer.ID
-	reqQueue    chan *reqSlot  // For stream acquisition with identifiers
-	activeOps   sync.WaitGroup // Track active operations
+	mu               sync.Mutex
+	streams          []network.Stream
+	maxSize          int
+	sequencerID      peer.ID
+	reqQueue         chan *reqSlot  // For stream acquisition with identifiers
+	activeOps        sync.WaitGroup // Track active operations
+	activeStreamCount atomic.Uint64  // Track total number of active streams
 }
 
 // streamWithSlot bundles a stream with its request slot
@@ -73,6 +75,7 @@ func InitLibp2pStreamPool(maxSize int) error {
 		maxSize:     maxSize,
 		sequencerID: seqId,
 		reqQueue:    make(chan *reqSlot, config.SettingsObj.MaxStreamQueueSize),
+		activeStreamCount: atomic.Uint64{},
 	}
 
 	// Pre-fill the pool with streams
@@ -83,6 +86,7 @@ func InitLibp2pStreamPool(maxSize int) error {
 			continue
 		}
 		pool.streams = append(pool.streams, stream)
+		pool.activeStreamCount.Add(1)
 	}
 
 	libp2pStreamPool = pool
@@ -165,6 +169,12 @@ func (p *StreamPool) GetStream() (*streamWithSlot, error) {
 			return nil
 		}
 
+		// Pool is empty, try to create a new stream if within maxSize limit
+		if p.activeStreamCount.Load() >= uint64(p.maxSize) {
+			log.Debugf("🚫 Max active streams reached (%d/%d). Waiting for stream to be released. [slot: %s]", p.activeStreamCount.Load(), p.maxSize, slot.id)
+			return fmt.Errorf("max active streams reached") // Retriable error
+		}
+
 		log.Debugf("🏗️ Creating new stream [slot: %s]", slot.id)
 		newStream, err := p.createNewStreamWithRetry()
 		if err != nil {
@@ -172,7 +182,8 @@ func (p *StreamPool) GetStream() (*streamWithSlot, error) {
 			return fmt.Errorf("failed to create new stream: %v", err)
 		}
 		stream = newStream
-		log.Debugf("✅ Created new stream successfully [slot: %s, stream: %v]", slot.id, stream.ID())
+		p.activeStreamCount.Add(1) // Increment count only on successful creation
+		log.Debugf("✅ Created new stream successfully [slot: %s, stream: %v]. Total active: %d", slot.id, stream.ID(), p.activeStreamCount.Load())
 		return nil
 	}, b)
 
@@ -184,7 +195,7 @@ func (p *StreamPool) GetStream() (*streamWithSlot, error) {
 		return nil, fmt.Errorf("failed to acquire stream after retries: %w", err)
 	}
 
-	log.Debugf("🎉 Successfully acquired stream [slot: %s, stream: %v]", slot.id, stream.ID())
+	log.Debugf("🎉 Successfully acquired stream [slot: %s, stream: %v]. Total active: %d", slot.id, stream.ID(), p.activeStreamCount.Load())
 	return &streamWithSlot{stream: stream, slot: slot}, nil
 }
 
@@ -199,6 +210,7 @@ func (p *StreamPool) ReleaseStream(sw *streamWithSlot, failed bool) {
 		if sw.stream != nil {
 			sw.stream.Reset()
 			sw.stream.Close()
+			p.activeStreamCount.Add(^uint64(0)) // Decrement atomically
 		}
 	} else {
 		// On success, return stream to pool
@@ -206,6 +218,7 @@ func (p *StreamPool) ReleaseStream(sw *streamWithSlot, failed bool) {
 		if len(p.streams) >= p.maxSize {
 			// Pool full, gracefully close the stream
 			sw.stream.Close()
+			p.activeStreamCount.Add(^uint64(0)) // Decrement atomically
 			log.Debugf("Stream gracefully closed as pool is full: %v", sw.stream.ID())
 		} else {
 			p.streams = append(p.streams, sw.stream)
@@ -246,28 +259,35 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 	var stream network.Stream
 
 	operation := func() error {
+		log.Trace("Attempting to create new stream within retry loop")
 		// Get current connection state
 		hostConn, seqId, err := GetSequencerConnection()
 		if err != nil {
-			log.Fatal("Lost connection to sequencer - terminating service for restart")
-			return fmt.Errorf("fatal: sequencer connection lost")
+			log.Errorf("Fatal: Lost connection to sequencer - terminating service for restart: %v", err)
+			return backoff.Permanent(fmt.Errorf("fatal: sequencer connection lost"))
 		}
 
 		if hostConn.Network().Connectedness(seqId) != network.Connected {
-			log.Fatal("Lost connection to sequencer - terminating service for restart")
-			return fmt.Errorf("fatal: connection to sequencer lost")
+			log.Warn("Connection to sequencer lost, attempting to reconnect...")
+			if err := ReconnectToSequencer(); err != nil {
+				log.Errorf("Reconnection attempt failed: %v", err)
+				return err // Retriable
+			}
+			log.Info("Successfully reconnected to sequencer.")
 		}
 
 		stream, err = p.createStream()
 		if err != nil {
+			log.WithField("error", err).Trace("Stream creation attempt failed")
 			return fmt.Errorf("stream creation failed: %w", err)
 		}
+		log.WithField("streamID", stream.ID()).Trace("Successfully created new stream within retry loop")
 		return nil
 	}
 
 	backOff := backoff.NewExponentialBackOff()
 	backOff.MaxElapsedTime = config.SettingsObj.StreamHealthCheckTimeout
-	backOff.InitialInterval = 100 * time.Millisecond
+	backOff.InitialInterval = 500 * time.Millisecond // Increased initial interval
 	backOff.MaxInterval = 2 * time.Second
 
 	err := backoff.Retry(operation, backOff)
