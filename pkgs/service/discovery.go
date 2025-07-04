@@ -3,12 +3,10 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"proto-snapshot-server/config"
 	"sync"
-	"time"
 
 	"github.com/pkg/errors"
 
@@ -162,25 +160,4 @@ func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 	wg.Wait()
 
 	return kademliaDHT
-}
-
-func ReconnectToSequencer() error {
-	log.Info("Attempting to reconnect to sequencer...")
-	// Assuming GetSequencerConnection is defined elsewhere and returns the host and sequencer ID
-	hostConn, seqId, err := GetSequencerConnection()
-	if err != nil {
-		return fmt.Errorf("failed to get sequencer connection details: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Attempt to connect to the sequencer peer
-	if err := hostConn.Connect(ctx, peer.AddrInfo{ID: seqId}); err != nil {
-		log.Errorf("Failed to reconnect to sequencer: %v", err)
-		return err
-	}
-
-	log.Info("Successfully reconnected to sequencer")
-	return nil
 }
