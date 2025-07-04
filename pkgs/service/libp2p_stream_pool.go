@@ -271,7 +271,6 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 	backOff := backoff.NewExponentialBackOff()
 	backOff.MaxElapsedTime = config.SettingsObj.StreamHealthCheckTimeout
 	backOff.InitialInterval = 100 * time.Millisecond
-	backOff.MaxInterval = 2 * time.Second
 
 	err := backoff.Retry(operation, backOff)
 	if err != nil {
