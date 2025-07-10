@@ -55,8 +55,8 @@ func InitializeService() error {
 	deps.sequencerID = SequencerID
 
 	// Give DHT some time to bootstrap and discover peers
-	log.Info("Waiting 10 seconds for DHT to discover peers...")
-	time.Sleep(10 * time.Second)
+	log.Info("Waiting 30 seconds for DHT to discover peers...")
+	time.Sleep(30 * time.Second)
 
 	var err error
 	gossiper, err = pubsub.NewGossipSub(context.Background(), deps.hostConn)
