@@ -32,6 +32,8 @@ type server struct {
 	metrics        *sync.Map     // map[uint64]*epochMetrics
 	currentEpoch   atomic.Uint64
 	pubsub         *pubsub.PubSub
+	joinedTopics   map[string]*pubsub.Topic
+	topicsMu       sync.Mutex
 }
 
 var _ pkgs.SubmissionServer = &server{}
@@ -50,6 +52,7 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 		writeSemaphore: make(chan struct{}, config.SettingsObj.MaxConcurrentWrites),
 		metrics:        &sync.Map{},
 		pubsub:         gossiper,
+		joinedTopics:   make(map[string]*pubsub.Topic),
 	}
 
 	// Start periodic metrics logging with 15 second interval
@@ -139,18 +142,30 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 }
 
 func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
-	topic := fmt.Sprintf("/powerloom/snapshot-submissions/%d", submission.Request.EpochId)
-	msgID := uuid.New().String() // Generate unique ID for tracking this message
-	log.WithFields(log.Fields{
-		"epoch_id":     submission.Request.EpochId,
-		"project_id":   submission.Request.ProjectId,
-		"snapshotter":  deps.hostConn.ID().String(),
-		"topic":        topic,
-		"msg_id":       msgID,
-		"snapshot_cid": submission.Request.SnapshotCid,
-		"data_market":  submission.DataMarket,
-		"node_version": submission.GetNodeVersion(),
-	}).Info("🔄 Preparing to broadcast submission to gossipsub")
+	topicString := fmt.Sprintf("/powerloom/snapshot-submissions/%d", submission.Request.EpochId)
+
+	s.topicsMu.Lock()
+	topic, ok := s.joinedTopics[topicString]
+	if !ok {
+		var err error
+		topic, err = s.pubsub.Join(topicString)
+		if err != nil {
+			s.topicsMu.Unlock()
+			log.WithFields(log.Fields{
+				"topic":        topicString,
+				"epoch_id":     submission.Request.EpochId,
+				"project_id":   submission.Request.ProjectId,
+				"snapshot_cid": submission.Request.SnapshotCid,
+				"error":        err.Error(),
+			}).Error("❌ Failed to join gossipsub topic")
+			return
+		}
+		s.joinedTopics[topicString] = topic
+		log.Infof("Successfully joined topic: %s", topicString)
+	}
+	s.topicsMu.Unlock()
+
+	log.Debugf("Broadcasting submission to topic: %s", topicString)
 
 	p2pSubmission := &P2PSnapshotSubmission{
 		EpochID:       submission.Request.EpochId,
@@ -162,71 +177,30 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 	// Marshal the message
 	msgBytes, err := json.Marshal(p2pSubmission)
 	if err != nil {
-		log.WithFields(log.Fields{
-			"epoch_id":     submission.Request.EpochId,
-			"project_id":   submission.Request.ProjectId,
-			"error":        err.Error(),
-			"msg_id":       msgID,
-			"snapshot_cid": submission.Request.SnapshotCid,
-		}).Error("❌ Failed to marshal P2P submission")
+		log.Errorf("Error marshalling P2P submission: %v", err)
 		return
 	}
-	log.WithFields(log.Fields{
-		"epoch_id":     submission.Request.EpochId,
-		"msg_size":     len(msgBytes),
-		"msg_id":       msgID,
-		"snapshot_cid": submission.Request.SnapshotCid,
-	}).Debug("📦 Successfully marshalled submission message")
 
-	// Join the topic first
-	pubsubTopic, err := s.pubsub.Join(topic)
+	// Publish the message
+	err = topic.Publish(context.Background(), msgBytes)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"epoch_id":     submission.Request.EpochId,
-			"topic":        topic,
-			"error":        err.Error(),
-			"msg_id":       msgID,
+			"project_id":   submission.Request.ProjectId,
+			"topic":        topicString,
 			"snapshot_cid": submission.Request.SnapshotCid,
-		}).Error("❌ Failed to join gossipsub topic")
-		return
-	}
-	log.WithFields(log.Fields{
-		"epoch_id":     submission.Request.EpochId,
-		"topic":        topic,
-		"msg_id":       msgID,
-		"snapshot_cid": submission.Request.SnapshotCid,
-	}).Debug("✅ Successfully joined gossipsub topic")
-
-	// Get current peer count for the topic
-	peers := pubsubTopic.ListPeers()
-	log.WithFields(log.Fields{
-		"epoch_id":     submission.Request.EpochId,
-		"topic":        topic,
-		"peer_count":   len(peers),
-		"msg_id":       msgID,
-		"snapshot_cid": submission.Request.SnapshotCid,
-	}).Debug("👥 Current peers in topic")
-
-	// Publish the message to the topic
-	ctx := context.Background()
-	if err := pubsubTopic.Publish(ctx, msgBytes); err != nil {
-		log.WithFields(log.Fields{
-			"epoch_id":     submission.Request.EpochId,
-			"topic":        topic,
 			"error":        err.Error(),
-			"peer_count":   len(peers),
-			"msg_id":       msgID,
-			"snapshot_cid": submission.Request.SnapshotCid,
-		}).Error("❌ Failed to publish to gossipsub topic")
+		}).Error("❌ Failed to publish submission to gossipsub topic")
 		return
 	}
 
+	peers := s.pubsub.ListPeers(topicString)
 	log.WithFields(log.Fields{
 		"epoch_id":     submission.Request.EpochId,
-		"topic":        topic,
+		"project_id":   submission.Request.ProjectId,
+		"topic":        topicString,
 		"peer_count":   len(peers),
 		"msg_size":     len(msgBytes),
-		"msg_id":       msgID,
 		"snapshot_cid": submission.Request.SnapshotCid,
 	}).Info("✅ Successfully published submission to gossipsub topic")
 }
