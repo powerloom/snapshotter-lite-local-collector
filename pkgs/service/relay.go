@@ -129,6 +129,54 @@ func CreateLibP2pHost() error {
 		log.Debugln("Error instantiating libp2p host: ", err.Error())
 		return err
 	}
+
+	// Connect to bootstrap node if configured
+	if config.SettingsObj.BootstrapNodeAddr != "" {
+		log.Infof("Attempting to connect to bootstrap node: %s", config.SettingsObj.BootstrapNodeAddr)
+		bootstrapMA, err := ma.NewMultiaddr(config.SettingsObj.BootstrapNodeAddr)
+		if err != nil {
+			log.Errorf("Invalid bootstrap multiaddress: %v", err)
+		} else {
+			bootstrapInfo, err := peer.AddrInfoFromP2pAddr(bootstrapMA)
+			if err != nil {
+				log.Errorf("Failed to parse bootstrap peer info: %v", err)
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := SequencerHostConn.Connect(ctx, *bootstrapInfo); err != nil {
+					log.Errorf("Failed to connect to bootstrap node %s: %v", config.SettingsObj.BootstrapNodeAddr, err)
+				} else {
+					log.Infof("Successfully connected to bootstrap node: %s", config.SettingsObj.BootstrapNodeAddr)
+				}
+			}
+		}
+	}
+
+	// Connect to bootstrap node if configured
+	if config.SettingsObj.BootstrapNodeAddr != "" {
+		log.Infof("Attempting to connect to bootstrap node: %s", config.SettingsObj.BootstrapNodeAddr)
+		bootstrapMA, err := ma.NewMultiaddr(config.SettingsObj.BootstrapNodeAddr)
+		if err != nil {
+			log.Errorf("Invalid bootstrap multiaddress: %v", err)
+		} else {
+			bootstrapInfo, err := peer.AddrInfoFromP2pAddr(bootstrapMA)
+			if err != nil {
+				log.Errorf("Failed to parse bootstrap peer info: %v", err)
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := SequencerHostConn.Connect(ctx, *bootstrapInfo); err != nil {
+					log.Errorf("Failed to connect to bootstrap node %s: %v", config.SettingsObj.BootstrapNodeAddr, err)
+				} else {
+					log.Infof("Successfully connected to bootstrap node: %s", config.SettingsObj.BootstrapNodeAddr)
+				}
+			}
+		}
+	}
+
+	log.Infof("✅ LibP2P host created. ID: %s", SequencerHostConn.ID().String())
+	log.Infof("Listening on addresses: %s", SequencerHostConn.Addrs())
+
 	return nil
 }
 

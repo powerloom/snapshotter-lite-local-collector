@@ -32,6 +32,7 @@ type Settings struct {
 
 	// Connection management settings
 	ConnectionRefreshInterval time.Duration
+	BootstrapNodeAddr         string
 }
 
 func LoadConfig() {
@@ -72,6 +73,7 @@ func LoadConfig() {
 
 	// Add connection refresh interval setting (default 5 minutes)
 	config.ConnectionRefreshInterval = time.Duration(getEnvAsInt("CONNECTION_REFRESH_INTERVAL_SEC", 300)) * time.Second
+	config.BootstrapNodeAddr = os.Getenv("BOOTSTRAP_NODE_ADDR")
 
 	SettingsObj = &config
 }
