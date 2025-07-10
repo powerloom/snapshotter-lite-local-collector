@@ -145,17 +145,43 @@ func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 	}
 
 	var wg sync.WaitGroup
-	for _, peerAddr := range dht.DefaultBootstrapPeers {
-		peerinfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := host.Connect(ctx, *peerinfo); err != nil {
-				log.Warning(err)
+	// Use custom bootstrap node if configured
+	if config.SettingsObj.BootstrapNodeAddr != "" {
+		log.Infof("Bootstrapping DHT with custom node: %s", config.SettingsObj.BootstrapNodeAddr)
+		peerMA, err := ma.NewMultiaddr(config.SettingsObj.BootstrapNodeAddr)
+		if err != nil {
+			log.Errorf("Invalid custom bootstrap multiaddress: %v", err)
+		} else {
+			peerinfo, err := peer.AddrInfoFromP2pAddr(peerMA)
+			if err != nil {
+				log.Errorf("Failed to parse custom bootstrap peer info: %v", err)
 			} else {
-				log.Debugln("Connection established with bootstrap node:", *peerinfo)
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if err := host.Connect(ctx, *peerinfo); err != nil {
+						log.Warningf("Failed to connect to custom bootstrap node %s: %v", peerinfo.ID, err)
+					} else {
+						log.Debugln("Connection established with custom bootstrap node:", *peerinfo)
+					}
+				}()
 			}
-		}()
+		}
+	} else {
+		// Fallback to default bootstrap peers if no custom node is configured
+		log.Info("Bootstrapping DHT with default peers")
+		for _, peerAddr := range dht.DefaultBootstrapPeers {
+			peerinfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := host.Connect(ctx, *peerinfo); err != nil {
+					log.Warning(err)
+				} else {
+					log.Debugln("Connection established with bootstrap node:", *peerinfo)
+				}
+			}()
+		}
 	}
 	wg.Wait()
 

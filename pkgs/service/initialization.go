@@ -59,6 +59,12 @@ func InitializeService() error {
 		return fmt.Errorf("failed to create pubsub: %w", err)
 	}
 
+	// Configure DHT for peer discovery
+	dhtInstance := ConfigureDHT(context.Background(), deps.hostConn)
+	if dhtInstance == nil {
+		return fmt.Errorf("failed to configure DHT")
+	}
+
 	// Initialize stream pool
 	if err := InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize); err != nil {
 		return fmt.Errorf("failed to initialize stream pool: %w", err)
