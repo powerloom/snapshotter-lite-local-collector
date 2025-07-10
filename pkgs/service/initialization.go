@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"proto-snapshot-server/config"
 	"sync"
+	"time"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -52,6 +53,10 @@ func InitializeService() error {
 
 	deps.hostConn = SequencerHostConn
 	deps.sequencerID = SequencerID
+
+	// Give DHT some time to bootstrap and discover peers
+	log.Info("Waiting 10 seconds for DHT to discover peers...")
+	time.Sleep(10 * time.Second)
 
 	var err error
 	gossiper, err = pubsub.NewGossipSub(context.Background(), deps.hostConn)
