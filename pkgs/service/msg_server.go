@@ -14,6 +14,7 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -30,6 +31,9 @@ type server struct {
 	writeSemaphore chan struct{} // Control concurrent writes
 	metrics        *sync.Map     // map[uint64]*epochMetrics
 	currentEpoch   atomic.Uint64
+	pubsub         *pubsub.PubSub
+	joinedTopics   map[string]*pubsub.Topic
+	topicsMu       sync.Mutex
 }
 
 var _ pkgs.SubmissionServer = &server{}
@@ -47,6 +51,8 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 	server := &server{
 		writeSemaphore: make(chan struct{}, config.SettingsObj.MaxConcurrentWrites),
 		metrics:        &sync.Map{},
+		pubsub:         gossiper,
+		joinedTopics:   make(map[string]*pubsub.Topic),
 	}
 
 	// Start periodic metrics logging with 15 second interval
@@ -77,6 +83,9 @@ func StartSubmissionServer(server pkgs.SubmissionServer) {
 
 func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSubmission) (*pkgs.SubmissionResponse, error) {
 	log.Debugln("Received submission with request: ", submission.Request)
+
+	// Go routine for broadcasting to gossipsub
+	go s.broadcastToGossipsub(submission)
 
 	submissionId := uuid.New()
 	submissionIdBytes, err := submissionId.MarshalText()
@@ -130,6 +139,70 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	}
 
 	return &pkgs.SubmissionResponse{Message: "Success"}, nil
+}
+
+func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
+	topicString := fmt.Sprintf("/powerloom/snapshot-submissions/%d", submission.Request.EpochId)
+
+	s.topicsMu.Lock()
+	topic, ok := s.joinedTopics[topicString]
+	if !ok {
+		var err error
+		topic, err = s.pubsub.Join(topicString)
+		if err != nil {
+			s.topicsMu.Unlock()
+			log.WithFields(log.Fields{
+				"topic":        topicString,
+				"epoch_id":     submission.Request.EpochId,
+				"project_id":   submission.Request.ProjectId,
+				"snapshot_cid": submission.Request.SnapshotCid,
+				"error":        err.Error(),
+			}).Error("❌ Failed to join gossipsub topic")
+			return
+		}
+		s.joinedTopics[topicString] = topic
+		log.Infof("Successfully joined topic: %s", topicString)
+	}
+	s.topicsMu.Unlock()
+
+	log.Debugf("Broadcasting submission to topic: %s", topicString)
+
+	p2pSubmission := &P2PSnapshotSubmission{
+		EpochID:       submission.Request.EpochId,
+		Submissions:   []*pkgs.SnapshotSubmission{submission},
+		SnapshotterID: deps.hostConn.ID().String(),
+		Signature:     nil, // Placeholder for signing logic
+	}
+
+	// Marshal the message
+	msgBytes, err := json.Marshal(p2pSubmission)
+	if err != nil {
+		log.Errorf("Error marshalling P2P submission: %v", err)
+		return
+	}
+
+	// Publish the message
+	err = topic.Publish(context.Background(), msgBytes)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"epoch_id":     submission.Request.EpochId,
+			"project_id":   submission.Request.ProjectId,
+			"topic":        topicString,
+			"snapshot_cid": submission.Request.SnapshotCid,
+			"error":        err.Error(),
+		}).Error("❌ Failed to publish submission to gossipsub topic")
+		return
+	}
+
+	peers := s.pubsub.ListPeers(topicString)
+	log.WithFields(log.Fields{
+		"epoch_id":     submission.Request.EpochId,
+		"project_id":   submission.Request.ProjectId,
+		"topic":        topicString,
+		"peer_count":   len(peers),
+		"msg_size":     len(msgBytes),
+		"snapshot_cid": submission.Request.SnapshotCid,
+	}).Info("✅ Successfully published submission to gossipsub topic")
 }
 
 func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotSimulationServer) error {
