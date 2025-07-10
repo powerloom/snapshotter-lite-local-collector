@@ -14,6 +14,9 @@ import (
 )
 
 func main() {
+	// Set libp2p log level to debug
+	os.Setenv("GOLOG_LOG_LEVEL", "debug")
+
 	// Initiate logger
 	helpers.InitLogger()
 
