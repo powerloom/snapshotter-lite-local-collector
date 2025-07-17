@@ -7,6 +7,7 @@ toolchain go1.23.1
 require (
 	github.com/cenkalti/backoff/v4 v4.2.0
 	github.com/google/uuid v1.6.0
+	github.com/ipfs/go-log v1.0.5
 	github.com/libp2p/go-libp2p v0.39.1
 	github.com/libp2p/go-libp2p-kad-dht v0.25.2
 	github.com/libp2p/go-libp2p-pubsub v0.14.0
@@ -47,7 +48,6 @@ require (
 	github.com/ipfs/boxo v0.10.0 // indirect
 	github.com/ipfs/go-cid v0.5.0 // indirect
 	github.com/ipfs/go-datastore v0.6.0 // indirect
-	github.com/ipfs/go-log v1.0.5 // indirect
 	github.com/ipfs/go-log/v2 v2.5.1 // indirect
 	github.com/ipld/go-ipld-prime v0.20.0 // indirect
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect

@@ -10,8 +10,10 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	logging "github.com/ipfs/go-log"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 )
 
 type ServiceDependencies struct {
@@ -26,11 +28,16 @@ var (
 	deps       ServiceDependencies
 	grpcServer *grpc.Server
 	gossiper   *pubsub.PubSub
+	logger     = logging.Logger("snapshotter-collector")
 )
 
 func InitializeService() error {
 	deps.mu.Lock()
 	defer deps.mu.Unlock()
+
+	// Set libp2p logging to debug
+	logging.SetAllLoggers(logging.LevelDebug)
+	logger.Debug("Libp2p logging set to debug level")
 
 	if deps.initialized {
 		log.Warn("Service already initialized")
@@ -58,16 +65,16 @@ func InitializeService() error {
 	log.Info("Waiting 30 seconds for DHT to discover peers...")
 	time.Sleep(30 * time.Second)
 
-	var err error
-	gossiper, err = pubsub.NewGossipSub(context.Background(), deps.hostConn)
-	if err != nil {
-		return fmt.Errorf("failed to create pubsub: %w", err)
-	}
-
 	// Configure DHT for peer discovery
 	dhtInstance := ConfigureDHT(context.Background(), deps.hostConn)
 	if dhtInstance == nil {
 		return fmt.Errorf("failed to configure DHT")
+	}
+
+	var err error
+	gossiper, err = pubsub.NewGossipSub(context.Background(), deps.hostConn, pubsub.WithDiscovery(routing.NewRoutingDiscovery(dhtInstance)))
+	if err != nil {
+		return fmt.Errorf("failed to create pubsub: %w", err)
 	}
 
 	// Initialize stream pool
