@@ -74,7 +74,7 @@ func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
 
 func CreateLibP2pHost() error {
 	var err error
-	TcpAddr, _ = ma.NewMultiaddr("/ip4/0.0.0.0/tcp/9000")
+	TcpAddr, _ = ma.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", config.SettingsObj.LocalCollectorP2PPort))
 
 	ConnManager, _ = connmgr.NewConnManager(
 		40960,

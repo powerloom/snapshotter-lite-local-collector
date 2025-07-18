@@ -36,8 +36,8 @@ func InitializeService() error {
 	defer deps.mu.Unlock()
 
 	// Set libp2p logging to debug
-	logging.SetAllLoggers(logging.LevelDebug)
-	logger.Debug("Libp2p logging set to debug level")
+	logging.SetAllLoggers(logging.LevelInfo)
+	logger.Debug("Libp2p logging set to info level")
 
 	if deps.initialized {
 		log.Warn("Service already initialized")

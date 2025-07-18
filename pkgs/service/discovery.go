@@ -134,7 +134,7 @@ func ConnectToTrustedRelayers(ctx context.Context, host host.Host) []Relayer {
 
 func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 	// Set up a Kademlia DHT for the service host
-	kademliaDHT, err := dht.New(ctx, host)
+	kademliaDHT, err := dht.New(ctx, host, dht.Mode(dht.ModeServer))
 	if err != nil {
 		log.Fatalf("Failed to create DHT: %s", err)
 	}
