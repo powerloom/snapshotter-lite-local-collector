@@ -10,6 +10,7 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	logging "github.com/ipfs/go-log"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -20,6 +21,7 @@ type ServiceDependencies struct {
 	hostConn    host.Host
 	sequencerID peer.ID
 	streamPool  *StreamPool
+	dht         *dht.IpfsDHT
 	initialized bool
 	mu          sync.RWMutex
 }
@@ -66,13 +68,13 @@ func InitializeService() error {
 	time.Sleep(30 * time.Second)
 
 	// Configure DHT for peer discovery
-	dhtInstance := ConfigureDHT(context.Background(), deps.hostConn)
-	if dhtInstance == nil {
+	deps.dht = ConfigureDHT(context.Background(), deps.hostConn)
+	if deps.dht == nil {
 		return fmt.Errorf("failed to configure DHT")
 	}
 
 	var err error
-	gossiper, err = pubsub.NewGossipSub(context.Background(), deps.hostConn, pubsub.WithDiscovery(routing.NewRoutingDiscovery(dhtInstance)))
+	gossiper, err = pubsub.NewGossipSub(context.Background(), deps.hostConn, pubsub.WithDiscovery(routing.NewRoutingDiscovery(deps.dht)))
 	if err != nil {
 		return fmt.Errorf("failed to create pubsub: %w", err)
 	}

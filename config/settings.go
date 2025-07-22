@@ -34,6 +34,7 @@ type Settings struct {
 	ConnectionRefreshInterval time.Duration
 	BootstrapNodeAddr         string
 	LocalCollectorP2PPort     string
+	RendezvousPoint           string
 }
 
 func LoadConfig() {
@@ -45,6 +46,7 @@ func LoadConfig() {
 	} else {
 		config.PortNumber = "50051" // Default value
 	}
+	config.RendezvousPoint = getEnvWithDefault("RENDEZVOUS_POINT", "powerloom-snapshot-sequencer-network")
 
 	if contract := os.Getenv("DATA_MARKET_CONTRACT"); contract == "" {
 		log.Fatal("DATA_MARKET_CONTRACT environment variable is required")

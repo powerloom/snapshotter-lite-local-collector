@@ -15,6 +15,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -144,6 +145,28 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 	topicString := fmt.Sprintf("/powerloom/snapshot-submissions/%d", submission.Request.EpochId)
 
+	// Actively discover peers using the rendezvous point
+	log.Infof("Searching for peers with rendezvous point: %s", config.SettingsObj.RendezvousPoint)
+	routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
+	peerChan, err := routingDiscovery.FindPeers(context.Background(), config.SettingsObj.RendezvousPoint)
+	if err != nil {
+		log.Errorf("Failed to find peers: %v", err)
+		return
+	}
+
+	for peer := range peerChan {
+		if peer.ID == deps.hostConn.ID() {
+			continue
+		}
+		log.Infof("Connecting to peer: %s", peer.ID.String())
+		if err := deps.hostConn.Connect(context.Background(), peer);
+		err != nil {
+			log.Errorf("Failed to connect to peer %s: %v", peer.ID.String(), err)
+		} else {
+			log.Infof("Connected to peer: %s", peer.ID.String())
+		}
+	}
+
 	s.topicsMu.Lock()
 	topic, ok := s.joinedTopics[topicString]
 	if !ok {
@@ -180,6 +203,25 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 		log.Errorf("Error marshalling P2P submission: %v", err)
 		return
 	}
+
+	// Pre-publish peer check with retry
+	for i := 0; i < 5; i++ {
+		peersInTopic := s.pubsub.ListPeers(topicString)
+		if len(peersInTopic) > 0 {
+			log.Infof("Found %d peers in topic, publishing...", len(peersInTopic))
+			break
+		}
+		log.Warningf("No peers found in topic %s, retrying in 2 seconds...", topicString)
+		time.Sleep(2 * time.Second)
+	}
+
+	// DIAGNOSTIC LOGGING
+	peersInTopic := s.pubsub.ListPeers(topicString)
+	log.WithFields(log.Fields{
+		"topic":      topicString,
+		"peer_count": len(peersInTopic),
+		"peers":      peersInTopic,
+	}).Info("DIAGNOSTIC: Peers in topic before publishing")
 
 	// Publish the message
 	err = topic.Publish(context.Background(), msgBytes)
