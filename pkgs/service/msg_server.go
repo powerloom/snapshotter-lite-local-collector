@@ -15,6 +15,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -145,43 +146,43 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 	topicString := fmt.Sprintf("/powerloom/snapshot-submissions/%d", submission.Request.EpochId)
 
-	// Actively discover peers using the rendezvous point
+	// Actively discover peers using the rendezvous point with a retry mechanism
 	log.Infof("Searching for peers with rendezvous point: %s", config.SettingsObj.RendezvousPoint)
-	routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
-	peerChan, err := routingDiscovery.FindPeers(context.Background(), config.SettingsObj.RendezvousPoint)
-	if err != nil {
-		log.Errorf("Failed to find peers: %v", err)
-		return
-	}
+	var peers []peer.AddrInfo
+	for i := 0; i < 5; i++ {
+		log.Infof("Discovery attempt %d/5", i+1)
+		routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
+		peerChan, err := routingDiscovery.FindPeers(context.Background(), config.SettingsObj.RendezvousPoint)
+		if err != nil {
+			log.Errorf("Failed to find peers: %v", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
 
-	// Add a timeout to the peer discovery process
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	for {
-		select {
-		case peer, ok := <-peerChan:
-			if !ok {
-				log.Info("Peer channel closed, discovery finished.")
-				goto discoveryFinished
-			}
-			if peer.ID == deps.hostConn.ID() {
+		for p := range peerChan {
+			if p.ID == deps.hostConn.ID() {
 				continue
 			}
-			log.Infof("Connecting to peer: %s", peer.ID.String())
-			if err := deps.hostConn.Connect(ctx, peer); err != nil {
-				log.Errorf("Failed to connect to peer %s: %v", peer.ID.String(), err)
-			} else {
-				log.Infof("Connected to peer: %s", peer.ID.String())
-			}
-		case <-ctx.Done():
-			log.Warn("Peer discovery timed out.")
-			goto discoveryFinished
+			peers = append(peers, p)
 		}
+
+		if len(peers) > 0 {
+			log.Infof("Found %d peers after %d attempts", len(peers), i+1)
+			break
+		}
+
+		log.Warn("No peers found, retrying in 5 seconds...")
+		time.Sleep(5 * time.Second)
 	}
 
-discoveryFinished:
-	log.Info("Peer discovery process complete.")
+	for _, p := range peers {
+		log.Infof("Connecting to peer: %s", p.ID.String())
+		if err := deps.hostConn.Connect(context.Background(), p); err != nil {
+			log.Errorf("Failed to connect to peer %s: %v", p.ID.String(), err)
+		} else {
+			log.Infof("Connected to peer: %s", p.ID.String())
+		}
+	}
 
 	s.topicsMu.Lock()
 	topic, ok := s.joinedTopics[topicString]
@@ -252,12 +253,12 @@ discoveryFinished:
 		return
 	}
 
-	peers := s.pubsub.ListPeers(topicString)
+	currentPeers := s.pubsub.ListPeers(topicString)
 	log.WithFields(log.Fields{
 		"epoch_id":     submission.Request.EpochId,
 		"project_id":   submission.Request.ProjectId,
 		"topic":        topicString,
-		"peer_count":   len(peers),
+		"peer_count":   len(currentPeers),
 		"msg_size":     len(msgBytes),
 		"snapshot_cid": submission.Request.SnapshotCid,
 	}).Info("✅ Successfully published submission to gossipsub topic")
