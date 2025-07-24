@@ -154,18 +154,34 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 		return
 	}
 
-	for peer := range peerChan {
-		if peer.ID == deps.hostConn.ID() {
-			continue
-		}
-		log.Infof("Connecting to peer: %s", peer.ID.String())
-		if err := deps.hostConn.Connect(context.Background(), peer);
-		err != nil {
-			log.Errorf("Failed to connect to peer %s: %v", peer.ID.String(), err)
-		} else {
-			log.Infof("Connected to peer: %s", peer.ID.String())
+	// Add a timeout to the peer discovery process
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for {
+		select {
+		case peer, ok := <-peerChan:
+			if !ok {
+				log.Info("Peer channel closed, discovery finished.")
+				goto discoveryFinished
+			}
+			if peer.ID == deps.hostConn.ID() {
+				continue
+			}
+			log.Infof("Connecting to peer: %s", peer.ID.String())
+			if err := deps.hostConn.Connect(ctx, peer); err != nil {
+				log.Errorf("Failed to connect to peer %s: %v", peer.ID.String(), err)
+			} else {
+				log.Infof("Connected to peer: %s", peer.ID.String())
+			}
+		case <-ctx.Done():
+			log.Warn("Peer discovery timed out.")
+			goto discoveryFinished
 		}
 	}
+
+discoveryFinished:
+	log.Info("Peer discovery process complete.")
 
 	s.topicsMu.Lock()
 	topic, ok := s.joinedTopics[topicString]
