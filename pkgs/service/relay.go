@@ -82,28 +82,29 @@ func CreateLibP2pHost() error {
 		connmgr.WithGracePeriod(1*time.Minute))
 
 	scalingLimits := rcmgr.DefaultLimits
-
-	libp2p.SetDefaultServiceLimits(&scalingLimits)
-
-	scaledDefaultLimits := scalingLimits.AutoScale()
-
-	limits := rcmgr.ResourceLimits{
-		StreamsOutbound: rcmgr.Unlimited,
-		StreamsInbound:  rcmgr.Unlimited,
-		Streams:         rcmgr.Unlimited,
-		Conns:           rcmgr.Unlimited,
-		ConnsOutbound:   rcmgr.Unlimited,
-		ConnsInbound:    rcmgr.Unlimited,
-		FD:              rcmgr.Unlimited,
-		Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
-	}
-
 	cfg := rcmgr.PartialLimitConfig{
-		System:    limits,
-		Transient: limits,
+		System: rcmgr.ResourceLimits{
+			StreamsOutbound: rcmgr.Unlimited,
+			StreamsInbound:  rcmgr.Unlimited,
+			Streams:         rcmgr.Unlimited,
+			Conns:           rcmgr.Unlimited,
+			ConnsOutbound:   rcmgr.Unlimited,
+			ConnsInbound:    rcmgr.Unlimited,
+			FD:              rcmgr.Unlimited,
+			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
+		},
+		Transient: rcmgr.ResourceLimits{
+			StreamsOutbound: rcmgr.Unlimited,
+			StreamsInbound:  rcmgr.Unlimited,
+			Streams:         rcmgr.Unlimited,
+			Conns:           rcmgr.Unlimited,
+			ConnsOutbound:   rcmgr.Unlimited,
+			ConnsInbound:    rcmgr.Unlimited,
+			FD:              rcmgr.Unlimited,
+			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
+		},
 	}
-
-	limiter := rcmgr.NewFixedLimiter(cfg.Build(scaledDefaultLimits))
+	limiter := rcmgr.NewFixedLimiter(cfg.Build(scalingLimits.AutoScale()))
 
 	rm, err = rcmgr.NewResourceManager(limiter, rcmgr.WithMetricsDisabled())
 
