@@ -87,22 +87,23 @@ func CreateLibP2pHost() error {
 
 	scaledDefaultLimits := scalingLimits.AutoScale()
 
-	cfg := rcmgr.PartialLimitConfig{
-		System: rcmgr.ResourceLimits{
-			StreamsOutbound: rcmgr.Unlimited,
-			StreamsInbound:  rcmgr.Unlimited,
-			Streams:         rcmgr.Unlimited,
-			Conns:           rcmgr.Unlimited,
-			ConnsOutbound:   rcmgr.Unlimited,
-			ConnsInbound:    rcmgr.Unlimited,
-			FD:              rcmgr.Unlimited,
-			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
-		},
+	limits := rcmgr.ResourceLimits{
+		StreamsOutbound: rcmgr.Unlimited,
+		StreamsInbound:  rcmgr.Unlimited,
+		Streams:         rcmgr.Unlimited,
+		Conns:           rcmgr.Unlimited,
+		ConnsOutbound:   rcmgr.Unlimited,
+		ConnsInbound:    rcmgr.Unlimited,
+		FD:              rcmgr.Unlimited,
+		Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
 	}
 
-	limits := cfg.Build(scaledDefaultLimits)
+	cfg := rcmgr.PartialLimitConfig{
+		System:    limits,
+		Transient: limits,
+	}
 
-	limiter := rcmgr.NewFixedLimiter(limits)
+	limiter := rcmgr.NewFixedLimiter(cfg.Build(scaledDefaultLimits))
 
 	rm, err = rcmgr.NewResourceManager(limiter, rcmgr.WithMetricsDisabled())
 
