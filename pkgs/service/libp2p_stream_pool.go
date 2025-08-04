@@ -249,13 +249,13 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 		// Get current connection state
 		hostConn, seqId, err := GetSequencerConnection()
 		if err != nil {
-			log.Fatal("Lost connection to sequencer - terminating service for restart")
-			return fmt.Errorf("fatal: sequencer connection lost")
+			log.Warnf("Connection to sequencer lost, will retry: %v", err)
+			return fmt.Errorf("sequencer connection lost: %w", err)
 		}
 
 		if hostConn.Network().Connectedness(seqId) != network.Connected {
-			log.Fatal("Lost connection to sequencer - terminating service for restart")
-			return fmt.Errorf("fatal: connection to sequencer lost")
+			log.Warn("Connection to sequencer not active, will retry")
+			return fmt.Errorf("connection to sequencer lost")
 		}
 
 		stream, err = p.createStream()
@@ -271,6 +271,8 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 
 	err := backoff.Retry(operation, backOff)
 	if err != nil {
+		// Only terminate after all retries are exhausted
+		log.Fatal("Lost connection to sequencer after all retries - terminating service for restart")
 		return nil, fmt.Errorf("failed to create stream after retries: %w", err)
 	}
 
