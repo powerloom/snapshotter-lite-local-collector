@@ -35,6 +35,8 @@ type Settings struct {
 	BootstrapNodeAddr         string
 	LocalCollectorP2PPort     string
 	RendezvousPoint           string
+	ConnManagerLowWater       int
+	ConnManagerHighWater      int
 }
 
 func LoadConfig() {
@@ -78,6 +80,9 @@ func LoadConfig() {
 	config.ConnectionRefreshInterval = time.Duration(getEnvAsInt("CONNECTION_REFRESH_INTERVAL_SEC", 300)) * time.Second
 	config.BootstrapNodeAddr = os.Getenv("BOOTSTRAP_NODE_ADDR")
 	config.LocalCollectorP2PPort = getEnvWithDefault("LOCAL_COLLECTOR_P2P_PORT", "9100")
+
+	config.ConnManagerLowWater = getEnvAsInt("CONN_MANAGER_LOW_WATER", 10000)
+	config.ConnManagerHighWater = getEnvAsInt("CONN_MANAGER_HIGH_WATER", 40000)
 
 	SettingsObj = &config
 }

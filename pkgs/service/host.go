@@ -3,13 +3,21 @@ package service
 import (
 	"context"
 	"fmt"
+	"proto-snapshot-server/config"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/routing"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	"github.com/libp2p/go-libp2p/p2p/security/noise"
+	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
+	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 )
@@ -17,14 +25,60 @@ import (
 // NewHost creates a new libp2p host and connects to bootstrap peers.
 func NewHost(ctx context.Context, bootstrapPeers string, listenerPort string) (h host.Host, kademliaDHT *dht.IpfsDHT, err error) {
 	listenAddr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", listenerPort)
-	h, err = libp2p.New(
-		libp2p.ListenAddrStrings(listenAddr),
-	)
+
+	// 1. Create a new resource manager with custom limits.
+	scalingLimits := rcmgr.DefaultLimits
+	limitsCfg := rcmgr.PartialLimitConfig{
+		System: rcmgr.ResourceLimits{
+			StreamsOutbound: rcmgr.Unlimited,
+			StreamsInbound:  rcmgr.Unlimited,
+			Streams:         rcmgr.Unlimited,
+			Conns:           rcmgr.Unlimited,
+			ConnsOutbound:   rcmgr.Unlimited,
+			ConnsInbound:    rcmgr.Unlimited,
+			FD:              rcmgr.Unlimited,
+			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
+		},
+		Transient: rcmgr.ResourceLimits{
+			StreamsOutbound: rcmgr.Unlimited,
+			StreamsInbound:  rcmgr.Unlimited,
+			Streams:         rcmgr.Unlimited,
+			Conns:           rcmgr.Unlimited,
+			ConnsOutbound:   rcmgr.Unlimited,
+			ConnsInbound:    rcmgr.Unlimited,
+			FD:              rcmgr.Unlimited,
+			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
+		},
+	}
+	limiter := rcmgr.NewFixedLimiter(limitsCfg.Build(scalingLimits.AutoScale()))
+	rscMgr, err := rcmgr.NewResourceManager(limiter, rcmgr.WithMetricsDisabled())
 	if err != nil {
-		return
+		return nil, nil, fmt.Errorf("failed to create resource manager: %w", err)
 	}
 
-	kademliaDHT, err = dht.New(ctx, h)
+	// 2. Create the connection manager
+	cm, err := connmgr.NewConnManager(
+		config.SettingsObj.ConnManagerLowWater,
+		config.SettingsObj.ConnManagerHighWater,
+		connmgr.WithGracePeriod(time.Minute),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create connection manager: %w", err)
+	}
+
+	// 3. Build the libp2p host
+	h, err = libp2p.New(
+		libp2p.ListenAddrStrings(listenAddr),
+		libp2p.ResourceManager(rscMgr),
+		libp2p.ConnectionManager(cm),
+		libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
+			kademliaDHT, err = dht.New(ctx, h, dht.Mode(dht.ModeClient))
+			return kademliaDHT, err
+		}),
+		libp2p.Security(noise.ID, noise.New),
+		libp2p.Security(libp2ptls.ID, libp2ptls.New),
+		libp2p.Transport(tcp.NewTCPTransport),
+	)
 	if err != nil {
 		return
 	}
