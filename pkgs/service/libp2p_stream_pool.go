@@ -272,7 +272,6 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 	err := backoff.Retry(operation, backOff)
 	if err != nil {
 		// Only terminate after all retries are exhausted
-		log.Fatal("Lost connection to sequencer after all retries - terminating service for restart")
 		return nil, fmt.Errorf("failed to create stream after retries: %w", err)
 	}
 
