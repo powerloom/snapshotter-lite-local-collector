@@ -132,6 +132,15 @@ func CreateLibP2pHost() error {
 		return err
 	}
 
+	SequencerHostConn.Network().Notify(&network.NotifyBundle{
+		ConnectedF: func(_ network.Network, conn network.Conn) {
+			log.Infof("Sequencer Host Peer connected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
+		},
+		DisconnectedF: func(_ network.Network, conn network.Conn) {
+			log.Infof("Sequencer Host Peer disconnected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
+		},
+	})
+
 	// Connect to bootstrap node if configured
 	if config.SettingsObj.BootstrapNodeAddr != "" {
 		log.Infof("Attempting to connect to bootstrap node: %s", config.SettingsObj.BootstrapNodeAddr)

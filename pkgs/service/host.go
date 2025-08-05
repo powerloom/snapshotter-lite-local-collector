@@ -9,12 +9,13 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/routing"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
-	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
@@ -86,12 +87,23 @@ func NewHost(ctx context.Context, bootstrapPeers string, listenerPort string) (h
 	if err = kademliaDHT.Bootstrap(ctx); err != nil {
 		return
 	}
+	log.Infof("Collector DHT routing table size: %d", kademliaDHT.RoutingTable().Size()) // ADDED
 
 	if bootstrapPeers != "" {
 		ConnectToBootstrapPeers(ctx, h, bootstrapPeers)
 	}
 
-	log.Infof("Libp2p host created with ID: %s", h.ID())
+	log.Infof("Libp2p host created with ID: %s, listening on: %v", h.ID(), h.Addrs())
+
+	h.Network().Notify(&network.NotifyBundle{
+		ConnectedF: func(_ network.Network, conn network.Conn) {
+			log.Infof("Collector Peer connected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
+		},
+		DisconnectedF: func(_ network.Network, conn network.Conn) {
+			log.Infof("Collector Peer disconnected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
+		},
+	})
+
 	return
 }
 
