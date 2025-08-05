@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"proto-snapshot-server/config"
 	"strings"
 	"sync"
@@ -67,8 +68,8 @@ func NewHost(ctx context.Context, bootstrapPeers string, listenerPort string) (h
 		return nil, nil, fmt.Errorf("failed to create connection manager: %w", err)
 	}
 
-	// 3. Build the libp2p host
-	h, err = libp2p.New(
+	// 3. Build the libp2p host options
+	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddr),
 		libp2p.ResourceManager(rscMgr),
 		libp2p.ConnectionManager(cm),
@@ -79,7 +80,22 @@ func NewHost(ctx context.Context, bootstrapPeers string, listenerPort string) (h
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 		libp2p.Transport(tcp.NewTCPTransport),
-	)
+	}
+
+	// Add public IP address if configured via environment variable
+	if publicIP := os.Getenv("PUBLIC_IP"); publicIP != "" {
+		publicAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", publicIP, listenerPort))
+		if err != nil {
+			log.Errorf("Failed to create public multiaddr: %v", err)
+		} else {
+			opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+				return append(addrs, publicAddr)
+			}))
+		}
+	}
+
+	// Create the host
+	h, err = libp2p.New(opts...)
 	if err != nil {
 		return
 	}
