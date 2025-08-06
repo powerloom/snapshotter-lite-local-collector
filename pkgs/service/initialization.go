@@ -74,7 +74,14 @@ func InitializeService() error {
 	}
 
 	var err error
-	gossiper, err = pubsub.NewGossipSub(context.Background(), deps.hostConn, pubsub.WithDiscovery(routing.NewRoutingDiscovery(deps.dht)))
+	// Configure gossipsub with discovery and flood publishing for better message propagation
+	gossiper, err = pubsub.NewGossipSub(
+		context.Background(), 
+		deps.hostConn,
+		pubsub.WithDiscovery(routing.NewRoutingDiscovery(deps.dht)),
+		pubsub.WithFloodPublish(true), // Ensure messages reach all peers, even if not in mesh
+		pubsub.WithDirectPeers([]peer.AddrInfo{}), // Can be populated with known peers
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create pubsub: %w", err)
 	}
