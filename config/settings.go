@@ -37,6 +37,7 @@ type Settings struct {
 	RendezvousPoint           string
 	ConnManagerLowWater       int
 	ConnManagerHighWater      int
+	PublicIP                  string
 }
 
 func LoadConfig() {
@@ -83,6 +84,7 @@ func LoadConfig() {
 
 	config.ConnManagerLowWater = getEnvAsInt("CONN_MANAGER_LOW_WATER", 10000)
 	config.ConnManagerHighWater = getEnvAsInt("CONN_MANAGER_HIGH_WATER", 40000)
+	config.PublicIP = os.Getenv("PUBLIC_IP")
 
 	SettingsObj = &config
 }

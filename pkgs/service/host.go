@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"os"
 	"proto-snapshot-server/config"
 	"strings"
 	"sync"
@@ -82,9 +81,9 @@ func NewHost(ctx context.Context, bootstrapPeers string, listenerPort string) (h
 		libp2p.Transport(tcp.NewTCPTransport),
 	}
 
-	// Add public IP address if configured via environment variable
-	if publicIP := os.Getenv("PUBLIC_IP"); publicIP != "" {
-		publicAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", publicIP, listenerPort))
+	// Add public IP address if configured
+	if config.SettingsObj.PublicIP != "" {
+		publicAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", config.SettingsObj.PublicIP, listenerPort))
 		if err != nil {
 			log.Errorf("Failed to create public multiaddr: %v", err)
 		} else {
