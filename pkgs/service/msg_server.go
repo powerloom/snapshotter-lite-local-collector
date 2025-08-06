@@ -15,8 +15,8 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	"github.com/libp2p/go-libp2p/p2p/discovery/util"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -36,6 +36,10 @@ type server struct {
 	pubsub         *pubsub.PubSub
 	joinedTopics   map[string]*pubsub.Topic
 	topicsMu       sync.Mutex
+	
+	// Two-level topic architecture
+	discoveryTopic     *pubsub.Topic  // For peer discovery (epoch 0)
+	submissionsTopic   *pubsub.Topic  // Single topic for all submissions
 }
 
 var _ pkgs.SubmissionServer = &server{}
@@ -57,6 +61,9 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 		joinedTopics:   make(map[string]*pubsub.Topic),
 	}
 
+	// Initialize the two-level topic architecture
+	go server.initializeTopics()
+	
 	// Start periodic metrics logging with 15 second interval
 	go server.logMetricsPeriodically(15 * time.Second)
 
@@ -86,7 +93,8 @@ func StartSubmissionServer(server pkgs.SubmissionServer) {
 func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSubmission) (*pkgs.SubmissionResponse, error) {
 	log.Debugln("Received submission with request: ", submission.Request)
 
-	// Go routine for broadcasting to gossipsub
+	// Broadcast to gossipsub for decentralized sequencers
+	// Only broadcast if it's for current epoch or epoch 0 (discovery)
 	go s.broadcastToGossipsub(submission)
 
 	submissionId := uuid.New()
@@ -144,102 +152,51 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 }
 
 func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
-	topicString := fmt.Sprintf("/powerloom/snapshot-submissions/%d", submission.Request.EpochId)
-
-	// Actively discover peers using the rendezvous point with a retry mechanism
-	log.Infof("Searching for peers with rendezvous point: %s", config.SettingsObj.RendezvousPoint)
-	var peers []peer.AddrInfo
-	for i := 0; i < 5; i++ {
-		log.Infof("Discovery attempt %d/5", i+1)
-		routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
-		peerChan, err := routingDiscovery.FindPeers(context.Background(), config.SettingsObj.RendezvousPoint)
-		if err != nil {
-			log.Errorf("Failed to find peers: %v", err)
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		for p := range peerChan {
-			if p.ID == deps.hostConn.ID() {
-				continue
-			}
-			peers = append(peers, p)
-		}
-
-		if len(peers) > 0 {
-			log.Infof("Found %d peers after %d attempts", len(peers), i+1)
-			break
-		}
-
-		log.Warn("No peers found, retrying in 5 seconds...")
-		time.Sleep(5 * time.Second)
+	// Determine which topic to use based on two-level architecture
+	var topicString string
+	var topic *pubsub.Topic
+	
+	// Use epoch 0 for discovery/joining room, or current epoch for submissions
+	if submission.Request.EpochId == 0 {
+		topicString = "/powerloom/snapshot-submissions/0"
+		topic = s.discoveryTopic
+	} else {
+		// For now, use the "all" topic for all non-zero epochs
+		// This simplifies discovery and reduces topic proliferation
+		topicString = "/powerloom/snapshot-submissions/all"
+		topic = s.submissionsTopic
 	}
-
-	for _, p := range peers {
-		log.Infof("Connecting to peer: %s", p.ID.String())
-		if err := deps.hostConn.Connect(context.Background(), p); err != nil {
-			log.Errorf("Failed to connect to peer %s: %v", p.ID.String(), err)
-		} else {
-			log.Infof("Connected to peer: %s", p.ID.String())
-		}
+	
+	// Skip if topics not initialized yet
+	if topic == nil {
+		log.Warnf("Topic %s not initialized yet, skipping broadcast", topicString)
+		return
 	}
-
-	s.topicsMu.Lock()
-	topic, ok := s.joinedTopics[topicString]
-	if !ok {
-		var err error
-		topic, err = s.pubsub.Join(topicString)
-		if err != nil {
-			s.topicsMu.Unlock()
-			log.WithFields(log.Fields{
-				"topic":        topicString,
-				"epoch_id":     submission.Request.EpochId,
-				"project_id":   submission.Request.ProjectId,
-				"snapshot_cid": submission.Request.SnapshotCid,
-				"error":        err.Error(),
-			}).Error("❌ Failed to join gossipsub topic")
-			return
-		}
-		s.joinedTopics[topicString] = topic
-		log.Infof("Successfully joined topic: %s", topicString)
+	
+	// Check if we have peers on the topic
+	peersInTopic := s.pubsub.ListPeers(topicString)
+	if len(peersInTopic) == 0 {
+		// Try quick discovery if no peers
+		s.quickDiscoverPeers()
+		// Re-check after discovery
+		peersInTopic = s.pubsub.ListPeers(topicString)
 	}
-	s.topicsMu.Unlock()
-
-	log.Debugf("Broadcasting submission to topic: %s", topicString)
-
+	
+	// Create P2P message
 	p2pSubmission := &P2PSnapshotSubmission{
 		EpochID:       submission.Request.EpochId,
 		Submissions:   []*pkgs.SnapshotSubmission{submission},
 		SnapshotterID: deps.hostConn.ID().String(),
-		Signature:     nil, // Placeholder for signing logic
+		Signature:     nil, // TODO: Add signing
 	}
-
+	
 	// Marshal the message
 	msgBytes, err := json.Marshal(p2pSubmission)
 	if err != nil {
 		log.Errorf("Error marshalling P2P submission: %v", err)
 		return
 	}
-
-	// Pre-publish peer check with retry
-	for i := 0; i < 5; i++ {
-		peersInTopic := s.pubsub.ListPeers(topicString)
-		if len(peersInTopic) > 0 {
-			log.Infof("Found %d peers in topic, publishing...", len(peersInTopic))
-			break
-		}
-		log.Warningf("No peers found in topic %s, retrying in 2 seconds...", topicString)
-		time.Sleep(2 * time.Second)
-	}
-
-	// DIAGNOSTIC LOGGING
-	peersInTopic := s.pubsub.ListPeers(topicString)
-	log.WithFields(log.Fields{
-		"topic":      topicString,
-		"peer_count": len(peersInTopic),
-		"peers":      peersInTopic,
-	}).Info("DIAGNOSTIC: Peers in topic before publishing")
-
+	
 	// Publish the message
 	err = topic.Publish(context.Background(), msgBytes)
 	if err != nil {
@@ -252,16 +209,47 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 		}).Error("❌ Failed to publish submission to gossipsub topic")
 		return
 	}
-
-	currentPeers := s.pubsub.ListPeers(topicString)
+	
 	log.WithFields(log.Fields{
 		"epoch_id":     submission.Request.EpochId,
 		"project_id":   submission.Request.ProjectId,
 		"topic":        topicString,
-		"peer_count":   len(currentPeers),
-		"msg_size":     len(msgBytes),
 		"snapshot_cid": submission.Request.SnapshotCid,
-	}).Info("✅ Successfully published submission to gossipsub topic")
+		"peer_count":   len(peersInTopic),
+		"msg_size":     len(msgBytes),
+	}).Info("✅ Successfully published submission to gossipsub")
+}
+
+// quickDiscoverPeers attempts a fast peer discovery
+func (s *server) quickDiscoverPeers() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	
+	routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
+	
+	// Try discovery on epoch 0 (joining room)
+	peerChan, err := routingDiscovery.FindPeers(ctx, "/powerloom/snapshot-submissions/0")
+	if err != nil {
+		log.Debugf("Quick discovery failed: %v", err)
+		return
+	}
+	
+	// Connect to up to 3 peers quickly
+	connectedCount := 0
+	for p := range peerChan {
+		if p.ID == deps.hostConn.ID() {
+			continue
+		}
+		
+		// Try to connect
+		if err := deps.hostConn.Connect(ctx, p); err == nil {
+			connectedCount++
+			log.Debugf("Quick connected to peer: %s", p.ID)
+			if connectedCount >= 3 {
+				break
+			}
+		}
+	}
 }
 
 func (s *server) SubmitSnapshotSimulation(stream pkgs.Submission_SubmitSnapshotSimulationServer) error {
@@ -449,4 +437,43 @@ func GracefulShutdownServer(s pkgs.SubmissionServer) {
 	}
 
 	log.Warn("Graceful shutdown is not supported for the provided server instance")
+}
+
+// initializeTopics sets up the two-level topic architecture
+func (s *server) initializeTopics() {
+	ctx := context.Background()
+	
+	// Join the discovery/joining room (repurposed epoch 0)
+	discoveryTopicName := "/powerloom/snapshot-submissions/0"
+	topic, err := s.pubsub.Join(discoveryTopicName)
+	if err != nil {
+		log.Errorf("Failed to join discovery topic: %v", err)
+		return
+	}
+	s.discoveryTopic = topic
+	
+	// Advertise on discovery topic for peer finding
+	go func() {
+		routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
+		log.Infof("Advertising on discovery topic: %s", discoveryTopicName)
+		util.Advertise(ctx, routingDiscovery, discoveryTopicName)
+	}()
+	
+	// Join the main submissions topic for all epochs
+	submissionsTopicName := "/powerloom/snapshot-submissions/all"
+	topic, err = s.pubsub.Join(submissionsTopicName)
+	if err != nil {
+		log.Errorf("Failed to join submissions topic: %v", err)
+		return
+	}
+	s.submissionsTopic = topic
+	
+	// Also advertise on the submissions topic
+	go func() {
+		routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
+		log.Infof("Advertising on submissions topic: %s", submissionsTopicName)
+		util.Advertise(ctx, routingDiscovery, submissionsTopicName)
+	}()
+	
+	log.Info("Two-level topic architecture initialized")
 }
