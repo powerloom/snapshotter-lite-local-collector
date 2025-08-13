@@ -4,6 +4,7 @@ import (
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	"github.com/sirupsen/logrus/hooks/writer"
+	"gopkg.in/natefinch/lumberjack.v2"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,35 @@ import (
 )
 
 func InitLogger() {
+	// Set log level from environment first, then fall back to command line arg
+	var level log.Level
+	logLevelStr := os.Getenv("LOG_LEVEL")
+	
+	if logLevelStr != "" {
+		// Try to parse from environment variable
+		parsedLevel, err := log.ParseLevel(logLevelStr)
+		if err != nil {
+			level = log.InfoLevel
+		} else {
+			level = parsedLevel
+		}
+	} else if len(os.Args) >= 2 {
+		// Fall back to command line argument for backwards compatibility
+		logLevel, err := strconv.ParseUint(os.Args[1], 10, 32)
+		if err != nil || logLevel > 6 {
+			level = log.InfoLevel
+		} else {
+			level = log.Level(logLevel)
+		}
+	} else {
+		// Default to info level instead of debug
+		level = log.InfoLevel
+	}
+	
+	log.SetLevel(level)
+	log.SetReportCaller(true)
+	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
+	
 	// Check if LOG_FILE environment variable is set
 	logFile := os.Getenv("LOG_FILE")
 	if logFile != "" {
@@ -18,59 +48,85 @@ func InitLogger() {
 		logDir := filepath.Dir(logFile)
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			fmt.Printf("Failed to create log directory: %v\n", err)
-			// Fall back to stdout/stderr
-			logFile = ""
-		} else {
-			// Open log file
-			file, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-			if err != nil {
-				fmt.Printf("Failed to open log file: %v\n", err)
-				// Fall back to stdout/stderr
-				logFile = ""
-			} else {
-				// Write to both file and stdout/stderr
-				log.SetOutput(io.MultiWriter(file, os.Stdout))
+			// Fall back to stdout/stderr split
+			setupConsoleLogging()
+			return
+		}
+		
+		// Parse rotation settings from environment
+		maxSize := 100 // Default 100MB
+		if val := os.Getenv("LOG_MAX_SIZE_MB"); val != "" {
+			if size, err := strconv.Atoi(val); err == nil {
+				maxSize = size
 			}
 		}
-	}
-
-	// If no log file or failed to open, use default behavior
-	if logFile == "" {
-		log.SetOutput(io.Discard) // Send all logs to nowhere by default
-
-		log.AddHook(&writer.Hook{ // Send logs with level higher than warning to stderr
-			Writer: os.Stderr,
-			LogLevels: []log.Level{
-				log.PanicLevel,
-				log.FatalLevel,
-				log.ErrorLevel,
-				log.WarnLevel,
-			},
-		})
-		log.AddHook(&writer.Hook{ // Send info and debug logs to stdout
-			Writer: os.Stdout,
-			LogLevels: []log.Level{
-				log.TraceLevel,
-				log.InfoLevel,
-				log.DebugLevel,
-			},
-		})
-	}
-
-	log.SetReportCaller(true)
-
-	if len(os.Args) < 2 {
-		fmt.Println("Pass loglevel as an argument if you don't want default(INFO) to be set.")
-		fmt.Println("Values to be passed for logLevel: ERROR(2),INFO(4),DEBUG(5)")
-		log.SetLevel(log.DebugLevel)
-	} else {
-		logLevel, err := strconv.ParseUint(os.Args[1], 10, 32)
-		if err != nil || logLevel > 6 {
-			log.SetLevel(log.DebugLevel) //TODO: Change default level to error
-		} else {
-			//TODO: Need to come up with approach to dynamically update logLevel.
-			log.SetLevel(log.Level(logLevel))
+		
+		maxBackups := 5 // Default keep 5 old files
+		if val := os.Getenv("LOG_MAX_BACKUPS"); val != "" {
+			if backups, err := strconv.Atoi(val); err == nil {
+				maxBackups = backups
+			}
 		}
+		
+		maxAge := 30 // Default 30 days
+		if val := os.Getenv("LOG_MAX_AGE_DAYS"); val != "" {
+			if age, err := strconv.Atoi(val); err == nil {
+				maxAge = age
+			}
+		}
+		
+		compress := false
+		if val := os.Getenv("LOG_COMPRESS"); val == "true" || val == "1" {
+			compress = true
+		}
+		
+		// Create rotating log writer
+		rotator := &lumberjack.Logger{
+			Filename:   logFile,
+			MaxSize:    maxSize,    // megabytes
+			MaxBackups: maxBackups, // number of old files
+			MaxAge:     maxAge,     // days
+			Compress:   compress,   // compress old files
+			LocalTime:  true,
+		}
+		
+		// Write to both rotating file and stdout
+		multiWriter := io.MultiWriter(rotator, os.Stdout)
+		log.SetOutput(multiWriter)
+		
+		log.WithFields(log.Fields{
+			"file":       logFile,
+			"maxSize":    maxSize,
+			"maxBackups": maxBackups,
+			"maxAge":     maxAge,
+			"compress":   compress,
+			"logLevel":   level.String(),
+		}).Info("Initialized rotating logger")
+	} else {
+		// If no log file, use stdout/stderr split
+		setupConsoleLogging()
+		log.WithField("logLevel", level.String()).Info("Initialized console logger")
 	}
-	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
+}
+
+func setupConsoleLogging() {
+	log.SetOutput(io.Discard) // Send all logs to nowhere by default
+	
+	log.AddHook(&writer.Hook{ // Send logs with level higher than warning to stderr
+		Writer: os.Stderr,
+		LogLevels: []log.Level{
+			log.PanicLevel,
+			log.FatalLevel,
+			log.ErrorLevel,
+			log.WarnLevel,
+		},
+	})
+	log.AddHook(&writer.Hook{ // Send info and debug logs to stdout
+		Writer: os.Stdout,
+		LogLevels: []log.Level{
+			log.TraceLevel,
+			log.InfoLevel,
+			log.DebugLevel,
+		},
+	})
 }
