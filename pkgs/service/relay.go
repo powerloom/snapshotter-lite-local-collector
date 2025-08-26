@@ -78,7 +78,7 @@ func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
 
 // loadOrCreatePrivateKey loads a private key from environment or creates a new one
 func loadOrCreatePrivateKey() (crypto.PrivKey, error) {
-	privKeyHex := os.Getenv("COLLECTOR_PRIVATE_KEY")
+	privKeyHex := os.Getenv("LOCAL_COLLECTOR_PRIVATE_KEY")
 	if privKeyHex != "" {
 		// Decode hex string to bytes
 		privKeyBytes, err := hex.DecodeString(privKeyHex)
@@ -90,7 +90,7 @@ func loadOrCreatePrivateKey() (crypto.PrivKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal private key: %v", err)
 		}
-		log.Info("Using configured private key from COLLECTOR_PRIVATE_KEY")
+		log.Info("Using configured private key from LOCAL_COLLECTOR_PRIVATE_KEY")
 		return privKey, nil
 	}
 	// Generate new key
@@ -98,7 +98,7 @@ func loadOrCreatePrivateKey() (crypto.PrivKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate private key: %v", err)
 	}
-	log.Warn("Generated new private key - set COLLECTOR_PRIVATE_KEY env var for consistent peer ID")
+	log.Warn("Generated new private key - set LOCAL_COLLECTOR_PRIVATE_KEY env var for consistent peer ID")
 	return privKey, err
 }
 
