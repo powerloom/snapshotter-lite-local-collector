@@ -174,10 +174,10 @@ func CreateLibP2pHost() error {
 
 	SequencerHostConn.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
-			log.Infof("Sequencer Host Peer connected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
+			log.Infof("P2P peer connected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
 		},
 		DisconnectedF: func(_ network.Network, conn network.Conn) {
-			log.Infof("Sequencer Host Peer disconnected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
+			log.Infof("P2P peer disconnected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
 		},
 	})
 

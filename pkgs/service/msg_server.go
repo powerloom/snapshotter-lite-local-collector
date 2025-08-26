@@ -468,6 +468,30 @@ func (s *server) initializeTopics() {
 	}
 	s.submissionsTopic = topic
 	
+	// Subscribe to the topic to be a proper gossipsub participant
+	submissionsSub, err := topic.Subscribe()
+	if err != nil {
+		log.Errorf("Failed to subscribe to submissions topic: %v", err)
+		return
+	}
+	
+	// Handle incoming messages (even if we don't process them, we need to consume them)
+	go func() {
+		for {
+			msg, err := submissionsSub.Next(ctx)
+			if err != nil {
+				log.Debugf("Error reading from submissions topic: %v", err)
+				continue
+			}
+			// Skip our own messages
+			if msg.GetFrom() == deps.hostConn.ID() {
+				continue
+			}
+			// Just acknowledge we received it - we're a publisher primarily
+			log.Debugf("Received submission from peer %s on main topic", msg.GetFrom())
+		}
+	}()
+	
 	// Also advertise on the submissions topic
 	go func() {
 		routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
@@ -475,5 +499,5 @@ func (s *server) initializeTopics() {
 		util.Advertise(ctx, routingDiscovery, submissionsTopicName)
 	}()
 	
-	log.Info("Two-level topic architecture initialized")
+	log.Info("Two-level topic architecture initialized with proper subscription")
 }
