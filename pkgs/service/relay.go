@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"proto-snapshot-server/config"
 	"sync"
 	"sync/atomic"
@@ -10,6 +13,7 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -72,6 +76,32 @@ func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
 	return false
 }
 
+// loadOrCreatePrivateKey loads a private key from environment or creates a new one
+func loadOrCreatePrivateKey() (crypto.PrivKey, error) {
+	privKeyHex := os.Getenv("COLLECTOR_PRIVATE_KEY")
+	if privKeyHex != "" {
+		// Decode hex string to bytes
+		privKeyBytes, err := hex.DecodeString(privKeyHex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode private key hex: %v", err)
+		}
+		// Load existing key
+		privKey, err := crypto.UnmarshalEd25519PrivateKey(privKeyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal private key: %v", err)
+		}
+		log.Info("Using configured private key from COLLECTOR_PRIVATE_KEY")
+		return privKey, nil
+	}
+	// Generate new key
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate private key: %v", err)
+	}
+	log.Warn("Generated new private key - set COLLECTOR_PRIVATE_KEY env var for consistent peer ID")
+	return privKey, err
+}
+
 func CreateLibP2pHost() error {
 	var err error
 	TcpAddr, _ = ma.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", config.SettingsObj.LocalCollectorP2PPort))
@@ -113,7 +143,15 @@ func CreateLibP2pHost() error {
 		return err
 	}
 
+	// Load or create private key for consistent peer ID
+	privKey, err := loadOrCreatePrivateKey()
+	if err != nil {
+		log.Errorf("Failed to get private key: %v", err)
+		return err
+	}
+
 	SequencerHostConn, err = libp2p.New(
+		libp2p.Identity(privKey),
 		libp2p.EnableRelay(),
 		libp2p.ConnectionManager(ConnManager),
 		libp2p.ListenAddrs(TcpAddr),
@@ -131,6 +169,8 @@ func CreateLibP2pHost() error {
 		log.Debugln("Error instantiating libp2p host: ", err.Error())
 		return err
 	}
+
+	log.Infof("Local collector host created with Peer ID: %s", SequencerHostConn.ID())
 
 	SequencerHostConn.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
