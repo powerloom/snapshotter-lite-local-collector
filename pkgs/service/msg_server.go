@@ -452,6 +452,30 @@ func (s *server) initializeTopics() {
 	}
 	s.discoveryTopic = topic
 	
+	// Subscribe to discovery topic to be a proper participant
+	discoverySub, err := topic.Subscribe()
+	if err != nil {
+		log.Errorf("Failed to subscribe to discovery topic: %v", err)
+		return
+	}
+	
+	// Handle discovery topic messages
+	go func() {
+		for {
+			msg, err := discoverySub.Next(ctx)
+			if err != nil {
+				log.Debugf("Error reading from discovery topic: %v", err)
+				continue
+			}
+			// Skip our own messages
+			if msg.GetFrom() == deps.hostConn.ID() {
+				continue
+			}
+			// Just acknowledge we received it
+			log.Debugf("Received message from peer %s on discovery topic", msg.GetFrom())
+		}
+	}()
+	
 	// Advertise on discovery topic for peer finding
 	go func() {
 		routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
