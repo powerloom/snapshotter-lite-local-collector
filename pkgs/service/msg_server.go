@@ -563,18 +563,23 @@ func (s *server) initializeTopics() {
 	log.Info("Two-level topic architecture initialized with active participation")
 }
 
-// publishHeartbeats sends periodic heartbeat messages to maintain mesh membership
+// publishHeartbeats sends frequent heartbeat messages to maintain mesh membership
 func (s *server) publishHeartbeats() {
-	ticker := time.NewTicker(45 * time.Second) // Heartbeat every 45 seconds
+	// CRITICAL: Much more frequent heartbeats to maintain active status
+	ticker := time.NewTicker(10 * time.Second) // Heartbeat every 10 seconds
 	defer ticker.Stop()
 	
+	messageCounter := uint64(0)
+	
 	for range ticker.C {
-		// Create a minimal heartbeat message
+		messageCounter++
+		
+		// Create a varied heartbeat message to show activity
 		heartbeat := &P2PSnapshotSubmission{
 			EpochID:       0, // Use epoch 0 for heartbeats
 			Submissions:   nil, // No actual submissions in heartbeat
 			SnapshotterID: deps.hostConn.ID().String(),
-			Signature:     []byte("heartbeat"), // Placeholder signature
+			Signature:     []byte(fmt.Sprintf("heartbeat-%d-%d", messageCounter, time.Now().Unix())),
 		}
 		
 		msgBytes, err := json.Marshal(heartbeat)
@@ -583,47 +588,111 @@ func (s *server) publishHeartbeats() {
 			continue
 		}
 		
-		// Publish to discovery topic to maintain presence
+		// Publish to BOTH topics to maintain presence everywhere
 		if s.discoveryTopic != nil {
 			if err := s.discoveryTopic.Publish(context.Background(), msgBytes); err != nil {
-				log.Debugf("Failed to publish heartbeat: %v", err)
+				log.Debugf("Failed to publish heartbeat to discovery: %v", err)
 			} else {
 				peersCount := len(s.pubsub.ListPeers("/powerloom/snapshot-submissions/0"))
-				log.Debugf("Published heartbeat to discovery topic, peers: %d", peersCount)
+				if messageCounter%6 == 0 { // Log every minute
+					log.Debugf("Published heartbeat to discovery topic, peers: %d", peersCount)
+				}
+			}
+		}
+		
+		// Also publish to submissions topic
+		if s.submissionsTopic != nil {
+			if err := s.submissionsTopic.Publish(context.Background(), msgBytes); err != nil {
+				log.Debugf("Failed to publish heartbeat to submissions: %v", err)
+			} else {
+				peersCount := len(s.pubsub.ListPeers("/powerloom/snapshot-submissions/all"))
+				if messageCounter%6 == 0 { // Log every minute
+					log.Debugf("Published heartbeat to submissions topic, peers: %d", peersCount)
+				}
 			}
 		}
 	}
 }
 
-// monitorMeshStatus periodically checks and logs mesh membership status
+// monitorMeshStatus periodically checks mesh membership and recovers from pruning
 func (s *server) monitorMeshStatus() {
-	ticker := time.NewTicker(60 * time.Second) // Check every minute
+	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds for faster recovery
 	defer ticker.Stop()
+	
+	lastRecoveryAttempt := time.Now()
+	consecutiveLowPeerCounts := 0
 	
 	for range ticker.C {
 		// Check peer counts for both topics
 		discoveryPeers := len(s.pubsub.ListPeers("/powerloom/snapshot-submissions/0"))
 		submissionPeers := len(s.pubsub.ListPeers("/powerloom/snapshot-submissions/all"))
 		
-		log.WithFields(log.Fields{
-			"discovery_peers":  discoveryPeers,
-			"submission_peers": submissionPeers,
-			"host_id":         deps.hostConn.ID().String(),
-		}).Info("Mesh status check")
-		
-		// If we've been pruned (0 peers), attempt reconnection
+		// CRITICAL: Detect and recover from pruning
 		if discoveryPeers == 0 || submissionPeers == 0 {
-			log.Warn("Detected pruning from mesh, attempting reconnection...")
-			s.quickDiscoverPeers()
+			consecutiveLowPeerCounts++
 			
-			// Force re-advertising
-			go func() {
-				routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
-				util.Advertise(context.Background(), routingDiscovery, 
-					"/powerloom/snapshot-submissions/0")
-				util.Advertise(context.Background(), routingDiscovery, 
-					"/powerloom/snapshot-submissions/all")
-			}()
+			log.WithFields(log.Fields{
+				"discovery_peers":  discoveryPeers,
+				"submission_peers": submissionPeers,
+				"consecutive_low": consecutiveLowPeerCounts,
+			}).Warn("⚠️ LOW/ZERO peer count detected - possible pruning")
+			
+			// Attempt recovery if it's been at least 30 seconds since last attempt
+			if time.Since(lastRecoveryAttempt) > 30*time.Second {
+				log.Warn("🔄 Attempting mesh recovery...")
+				lastRecoveryAttempt = time.Now()
+				
+				// Quick peer discovery
+				s.quickDiscoverPeers()
+				
+				// Force re-advertising on both topics
+				go func() {
+					routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
+					ctx := context.Background()
+					
+					// Re-advertise on discovery topic
+					util.Advertise(ctx, routingDiscovery, "/powerloom/snapshot-submissions/0")
+					log.Debug("Re-advertised on discovery topic")
+					
+					// Re-advertise on submissions topic
+					util.Advertise(ctx, routingDiscovery, "/powerloom/snapshot-submissions/all")
+					log.Debug("Re-advertised on submissions topic")
+					
+					// Re-join topics if needed
+					s.topicsMu.Lock()
+					if s.discoveryTopic == nil {
+						topic, err := s.pubsub.Join("/powerloom/snapshot-submissions/0")
+						if err == nil {
+							s.discoveryTopic = topic
+							log.Info("Re-joined discovery topic")
+						}
+					}
+					if s.submissionsTopic == nil {
+						topic, err := s.pubsub.Join("/powerloom/snapshot-submissions/all")
+						if err == nil {
+							s.submissionsTopic = topic
+							log.Info("Re-joined submissions topic")
+						}
+					}
+					s.topicsMu.Unlock()
+				}()
+			}
+		} else {
+			// Reset counter if we have peers
+			if consecutiveLowPeerCounts > 0 {
+				log.WithFields(log.Fields{
+					"discovery_peers":  discoveryPeers,
+					"submission_peers": submissionPeers,
+				}).Info("✅ Mesh recovered - peer connections restored")
+			}
+			consecutiveLowPeerCounts = 0
+			
+			// Regular status log every 2 minutes
+			log.WithFields(log.Fields{
+				"discovery_peers":  discoveryPeers,
+				"submission_peers": submissionPeers,
+				"host_id":         deps.hostConn.ID().String(),
+			}).Debug("Mesh status check - healthy")
 		}
 	}
 }

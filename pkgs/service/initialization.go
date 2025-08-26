@@ -79,75 +79,90 @@ func InitializeService() error {
 	// These settings prevent pruning of nodes that primarily publish
 	gossipParams := pubsub.DefaultGossipSubParams()
 	
-	// Increase mesh degree targets to maintain more connections
-	gossipParams.D = 8                     // Target mesh degree (default 6)
-	gossipParams.Dlo = 6                   // Lower bound for mesh degree (default 5)
-	gossipParams.Dhi = 12                  // Upper bound for mesh degree (default 12)
-	gossipParams.Dlazy = 8                 // Lazy push/full push threshold (default 6)
+	// CRITICAL: More aggressive mesh maintenance parameters
+	gossipParams.D = 10                    // Higher target mesh degree (default 6)
+	gossipParams.Dlo = 8                   // Higher lower bound (default 5)
+	gossipParams.Dhi = 16                  // Higher upper bound (default 12)
+	gossipParams.Dlazy = 10                // Higher lazy push threshold (default 6)
+	gossipParams.Dout = 4                  // Outbound connections per topic (default 2)
+	gossipParams.Dscore = 6                // Score-based peer selection (default 4)
 	
-	// Increase heartbeat interval to reduce churn
-	gossipParams.HeartbeatInterval = 2 * time.Second  // Slower heartbeat (default 1s)
+	// CRITICAL: Faster heartbeat for active presence
+	gossipParams.HeartbeatInterval = 700 * time.Millisecond  // Much faster (default 1s)
 	
 	// Increase history windows to keep messages longer
-	gossipParams.HistoryLength = 10        // Keep more message IDs (default 5)
-	gossipParams.HistoryGossip = 5         // Gossip more history (default 3)
+	gossipParams.HistoryLength = 12        // Keep more message IDs (default 5)
+	gossipParams.HistoryGossip = 6         // Gossip more history (default 3)
 	
 	// Configure fanout parameters for publishing
-	gossipParams.FanoutTTL = 120 * time.Second  // Keep fanout peers longer (default 60s)
+	gossipParams.FanoutTTL = 300 * time.Second  // Much longer fanout retention (default 60s)
 	
-	// Configure custom peer scoring to be more lenient
+	// CRITICAL: Opportunistic grafting for maintaining connections
+	gossipParams.OpportunisticGraftTicks = 30     // Check every 30 heartbeats (default 60)
+	gossipParams.OpportunisticGraftPeers = 4      // Graft up to 4 peers (default 2)
+	
+	// CRITICAL: Prune backoff to prevent re-pruning
+	gossipParams.PruneBackoff = 5 * time.Minute   // Longer backoff (default 1 min)
+	gossipParams.UnsubscribeBackoff = 30 * time.Second  // Unsubscribe backoff
+	
+	// CRITICAL: Connection manager parameters
+	gossipParams.MaxPendingConnections = 256      // More pending connections
+	gossipParams.ConnectionTimeout = 60 * time.Second  // Longer timeout
+	
+	// Configure custom peer scoring to be EXTREMELY lenient for publishers
 	peerScoreParams := &pubsub.PeerScoreParams{
-		// Slower decay rates to prevent rapid score degradation
-		DecayInterval: 30 * time.Second,      // Much slower decay (default 1s)
-		DecayToZero:   0.01,                  // Very slow decay to zero
+		// CRITICAL: Very slow decay to maintain scores
+		DecayInterval: 60 * time.Second,      // Much slower decay (default 1s)
+		DecayToZero:   0.001,                 // Extremely slow decay to zero
 		
-		// App-specific scoring - give all peers a baseline positive score
+		// CRITICAL: Very high baseline positive scores
 		AppSpecificScore: func(p peer.ID) float64 {
-			// Give ourselves and other publishers a high baseline score
+			// Give ourselves an extremely high score
 			if p == deps.hostConn.ID() {
-				return 1000.0
+				return 100000.0  // Extremely high self-score
 			}
-			return 100.0
+			// Give all other peers a very high baseline
+			return 10000.0  // Very high baseline for all peers
 		},
-		AppSpecificWeight: 1.0,
+		AppSpecificWeight: 10.0,  // Higher weight for app-specific scores
 		
-		// IP colocation penalty (disable for testing, enable in production)
-		IPColocationFactorThreshold: 10,
-		IPColocationFactorWeight:    -5.0,
+		// CRITICAL: Disable IP colocation penalties completely
+		IPColocationFactorThreshold: 1000,    // Effectively disabled
+		IPColocationFactorWeight:    0.0,     // No penalty
 		
-		// Behaviour penalties - make them more lenient
-		BehaviourPenaltyWeight:    -1.0,     // Reduced from default -10
-		BehaviourPenaltyThreshold:  10.0,    // Increased from default 6
-		BehaviourPenaltyDecay:      0.95,    // Slower decay (default 0.9)
+		// CRITICAL: Completely disable behavior penalties
+		BehaviourPenaltyWeight:    0.0,      // NO penalty (disabled)
+		BehaviourPenaltyThreshold:  1000.0,  // Very high threshold
+		BehaviourPenaltyDecay:      0.999,   // Extremely slow decay
 		
 		// Remove time in mesh penalty for new peers
 		RetainScore: 30 * time.Minute,       // Keep scores longer
 	}
 	
-	// Configure topic-specific parameters
+	// Configure topic-specific parameters - COMPLETELY DISABLE PENALTIES
 	topicScoreParams := &pubsub.TopicScoreParams{
-		// Reduce penalties for not delivering messages
-		TopicWeight: 0.5,  // Reduce topic importance
+		// CRITICAL: High topic weight for positive scores
+		TopicWeight: 10.0,  // High topic importance for positive scoring
 		
-		// Time in mesh parameters - reward staying in mesh
-		TimeInMeshWeight:  0.1,                      // Small positive weight
-		TimeInMeshQuantum: 10 * time.Second,         // Slower accumulation
-		TimeInMeshCap:     100.0,                    // Cap the benefit
+		// CRITICAL: Strongly reward staying in mesh
+		TimeInMeshWeight:  10.0,                     // High positive weight
+		TimeInMeshQuantum: 1 * time.Second,          // Fast accumulation
+		TimeInMeshCap:     10000.0,                  // Very high cap
 		
-		// First message deliveries - reward publishing
-		FirstMessageDeliveriesWeight:  1.0,          // Positive weight for publishing
-		FirstMessageDeliveriesDecay:   0.95,         // Slow decay
-		FirstMessageDeliveriesCap:     100.0,        // Cap the benefit
+		// CRITICAL: Strongly reward publishing
+		FirstMessageDeliveriesWeight:  100.0,        // Very high positive weight
+		FirstMessageDeliveriesDecay:   0.999,        // Extremely slow decay
+		FirstMessageDeliveriesCap:     10000.0,      // Very high cap
 		
-		// Mesh message deliveries - very lenient
-		MeshMessageDeliveriesWeight:     -0.1,       // Very small penalty (default -1)
-		MeshMessageDeliveriesDecay:      0.95,       // Slow decay
-		MeshMessageDeliveriesThreshold:  0.1,        // Very low threshold
-		MeshMessageDeliveriesCap:        10.0,       // Low cap on penalty
-		MeshMessageDeliveriesActivation: 60 * time.Second,  // Long grace period
-		MeshMessageDeliveriesWindow:     30 * time.Second,  // Longer window
+		// CRITICAL: COMPLETELY DISABLE mesh delivery penalties
+		MeshMessageDeliveriesWeight:     0.0,        // NO PENALTY (disabled)
+		MeshMessageDeliveriesDecay:      0.999,      // Extremely slow decay if ever enabled
+		MeshMessageDeliveriesThreshold:  0.001,      // Extremely low threshold
+		MeshMessageDeliveriesCap:        1.0,        // Minimal cap
+		MeshMessageDeliveriesActivation: 24 * time.Hour,  // Never activate in practice
+		MeshMessageDeliveriesWindow:     24 * time.Hour,  // Huge window
 		
-		// Remove mesh failure penalty
+		// CRITICAL: Disable ALL failure penalties
 		MeshFailurePenaltyWeight: 0.0,               // No penalty for mesh failures
 		MeshFailurePenaltyDecay:  0.0,
 		
@@ -156,13 +171,13 @@ func InitializeService() error {
 		InvalidMessageDeliveriesDecay:  0.5,
 	}
 	
-	// Configure score thresholds to be more lenient
+	// Configure score thresholds to be EXTREMELY lenient
 	peerScoreThresholds := &pubsub.PeerScoreThresholds{
-		GossipThreshold:             -500,    // Much more lenient (default -10)
-		PublishThreshold:            -1000,   // Much more lenient (default -50)
-		GraylistThreshold:           -2000,   // Much more lenient (default -80)
-		AcceptPXThreshold:           0,       // Accept peer exchange from neutral peers
-		OpportunisticGraftThreshold: 1,       // Low threshold for grafting
+		GossipThreshold:             -100000,  // Extremely lenient (default -10)
+		PublishThreshold:            -200000,  // Extremely lenient (default -50)
+		GraylistThreshold:           -500000,  // Extremely lenient (default -80)
+		AcceptPXThreshold:           -10000,   // Accept peer exchange even from negative peers
+		OpportunisticGraftThreshold: -1000,    // Graft even slightly negative peers
 	}
 	
 	// Set topic score parameters for both topics
@@ -171,7 +186,7 @@ func InitializeService() error {
 		"/powerloom/snapshot-submissions/all": topicScoreParams,
 	}
 	
-	// Configure gossipsub with custom parameters
+	// Configure gossipsub with custom parameters and ALL critical options
 	gossiper, err = pubsub.NewGossipSub(
 		context.Background(), 
 		deps.hostConn,
@@ -185,14 +200,20 @@ func InitializeService() error {
 		pubsub.WithPeerScore(peerScoreParams, peerScoreThresholds),
 		
 		// Message validation - accept all messages quickly
-		pubsub.WithValidateQueueSize(128),
-		pubsub.WithValidateWorkers(4),
+		pubsub.WithValidateQueueSize(256),
+		pubsub.WithValidateWorkers(8),
+		pubsub.WithValidateThrottle(100),     // Process more messages concurrently
 		
 		// Publishing configuration
 		pubsub.WithFloodPublish(true),        // Flood to all peers for redundancy
 		
 		// Peer exchange for discovery
 		pubsub.WithPeerExchange(true),
+		
+		// CRITICAL: Additional options to prevent pruning
+		pubsub.WithMaxMessageSize(10 * 1024 * 1024),  // 10MB max message size
+		pubsub.WithPeerOutboundQueueSize(1024),        // Larger outbound queue
+		pubsub.WithRawTracer(nil),                     // Can add tracer for debugging
 		
 		// Direct peers can be added here if needed
 		pubsub.WithDirectPeers([]peer.AddrInfo{}),
@@ -205,7 +226,8 @@ func InitializeService() error {
 		return fmt.Errorf("failed to create pubsub: %w", err)
 	}
 	
-	log.Info("Initialized gossipsub with custom parameters optimized for publishing")
+	log.Info("Initialized gossipsub with AGGRESSIVE anti-pruning parameters for publishers")
+	log.Debug("Configuration: DisabledMeshDeliveryPenalty=true, HighBaselineScores=true, FrequentHeartbeat=700ms")
 
 	// Initialize stream pool
 	if err := InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize); err != nil {
