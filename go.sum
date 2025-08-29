@@ -265,8 +265,8 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/polydawn/refmt v0.89.0 h1:ADJTApkvkeBZsN0tBTx8QjpD9JkmxbKp0cxfr9qszm4=
 github.com/polydawn/refmt v0.89.0/go.mod h1:/zvteZs/GwLtCgZ4BL6CBsk9IKIlexP43ObX9AxTqTw=
-github.com/powerloom/snapshot-sequencer-validator v0.0.0-20250828112017-8cc2784436cd h1:V4kkfENChjR1IfzvUx7HYjhJdyRUpzZo+c2KfLs3t+s=
-github.com/powerloom/snapshot-sequencer-validator v0.0.0-20250828112017-8cc2784436cd/go.mod h1:fBQFp/08gqxD+8MMaieyrtuvSysuH31Eb1GziPtQGzY=
+github.com/powerloom/snapshot-sequencer-validator v0.0.0-20250829130620-9c5aacc89931 h1:c3uJGN4UkbJPOqsoavhJRpC268bNYSC8XC4+zGWb2qo=
+github.com/powerloom/snapshot-sequencer-validator v0.0.0-20250829130620-9c5aacc89931/go.mod h1:5HzYNebkR1tHQSEislFyb4WxOYi747yOox7PKBxxgzI=
 github.com/prometheus/client_golang v0.8.0/go.mod h1:7SWBe2y4D6OKWSNQJUaRYU/AaXPKyh/dDVn+NZz0KFw=
 github.com/prometheus/client_golang v1.23.0 h1:ust4zpdl9r4trLY/gSjlm07PuiBq2ynaXXlptpfy8Uc=
 github.com/prometheus/client_golang v1.23.0/go.mod h1:i/o0R9ByOnHX0McrTMTyhYvKE4haaf2mW08I+jGAjEE=

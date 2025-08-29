@@ -11,7 +11,7 @@ require (
 	github.com/libp2p/go-libp2p-pubsub v0.14.2
 	github.com/multiformats/go-multiaddr v0.16.1
 	github.com/pkg/errors v0.9.1
-	github.com/powerloom/snapshot-sequencer-validator v0.0.0-20250828112017-8cc2784436cd
+	github.com/powerloom/snapshot-sequencer-validator v0.0.0-20250829130620-9c5aacc89931
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.10.0
 	google.golang.org/grpc v1.73.0
