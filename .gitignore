@@ -1,1 +1,19 @@
+# Binary files (never commit)
 cmd/cmd
+cmd/main
+main
+local-collector
+
+# Build artifacts  
+*.test
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Binary output directory if using one
+bin/
+
+# Environment files
+.env
+.env.*

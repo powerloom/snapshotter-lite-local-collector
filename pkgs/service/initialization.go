@@ -76,10 +76,11 @@ func InitializeService() error {
 
 	var err error
 	
-	// Get standardized gossipsub parameters for snapshot submissions mesh
-	gossipParams, peerScoreParams, peerScoreThresholds := gossipconfig.ConfigureSnapshotSubmissionsMesh(deps.hostConn.ID())
+	// Get standardized gossipsub parameters for snapshot submissions mesh	
+gossipParams, peerScoreParams, peerScoreThresholds, paramHash := gossipconfig.ConfigureSnapshotSubmissionsMesh(deps.hostConn.ID())
 	
 	log.Info("Using standardized gossipsub mesh parameters from gossipconfig package")
+	log.Infof("🔑 Gossipsub parameter hash: %s (local collector)", paramHash)
 	
 	
 	
