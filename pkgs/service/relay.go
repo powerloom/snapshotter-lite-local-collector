@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"proto-snapshot-server/config"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -102,14 +103,34 @@ func loadOrCreatePrivateKey() (crypto.PrivKey, error) {
 	return privKey, err
 }
 
+// getEnvAsInt gets an environment variable as an integer with a default value
+func getEnvAsInt(key string, defaultValue int) int {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultValue
+	}
+	intVal, err := strconv.Atoi(val)
+	if err != nil {
+		log.Warnf("Invalid value for %s: %s, using default: %d", key, val, defaultValue)
+		return defaultValue
+	}
+	return intVal
+}
+
 func CreateLibP2pHost() error {
 	var err error
 	TcpAddr, _ = ma.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", config.SettingsObj.LocalCollectorP2PPort))
 
+	// Configure connection manager for publisher mode
+	connLowWater := getEnvAsInt("CONN_MANAGER_LOW_WATER", 50)
+	connHighWater := getEnvAsInt("CONN_MANAGER_HIGH_WATER", 200)
+	
 	ConnManager, _ = connmgr.NewConnManager(
-		40960,
-		81920,
+		connLowWater,
+		connHighWater,
 		connmgr.WithGracePeriod(1*time.Minute))
+	
+	log.Infof("Connection manager configured: LowWater=%d, HighWater=%d (publisher mode)", connLowWater, connHighWater)
 
 	scalingLimits := rcmgr.DefaultLimits
 	cfg := rcmgr.PartialLimitConfig{
