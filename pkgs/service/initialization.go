@@ -83,48 +83,31 @@ func InitializeService() error {
 	
 	
 	
-	// Configure gossipsub with custom parameters and ALL critical options
+	// Configure gossipsub with standardized parameters matching other components
 	gossiper, err = pubsub.NewGossipSub(
 		context.Background(), 
 		deps.hostConn,
-		// Discovery configuration
-		pubsub.WithDiscovery(routing.NewRoutingDiscovery(deps.dht)),
-		
 		// Gossipsub protocol parameters
 		pubsub.WithGossipSubParams(*gossipParams),
 		
 		// Peer scoring configuration
 		pubsub.WithPeerScore(peerScoreParams, peerScoreThresholds),
 		
-		// Message validation - accept all messages quickly
-		pubsub.WithValidateQueueSize(256),
-		pubsub.WithValidateWorkers(8),
-		pubsub.WithValidateThrottle(100),     // Process more messages concurrently
+		// Discovery configuration
+		pubsub.WithDiscovery(routing.NewRoutingDiscovery(deps.dht)),
 		
 		// Publishing configuration
 		pubsub.WithFloodPublish(true),        // Flood to all peers for redundancy
 		
-		// Peer exchange for discovery
-		pubsub.WithPeerExchange(true),
-		
-		// CRITICAL: Additional options to prevent pruning
-		pubsub.WithMaxMessageSize(10 * 1024 * 1024),  // 10MB max message size
-		pubsub.WithPeerOutboundQueueSize(1024),        // Larger outbound queue
-		pubsub.WithRawTracer(nil),                     // Can add tracer for debugging
-		
-		// Direct peers can be added here if needed
-		pubsub.WithDirectPeers([]peer.AddrInfo{}),
-		
-		// Message signing (can be disabled for performance in trusted networks)
-		pubsub.WithMessageSigning(true),
-		pubsub.WithStrictSignatureVerification(false),
+		// Message signing policy - consistent with other components
+		pubsub.WithMessageSignaturePolicy(pubsub.StrictSign),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create pubsub: %w", err)
 	}
 	
-	log.Info("Initialized gossipsub with AGGRESSIVE anti-pruning parameters for publishers")
-	log.Debug("Configuration: DisabledMeshDeliveryPenalty=true, HighBaselineScores=true, FrequentHeartbeat=700ms")
+	log.Info("Initialized gossipsub with standardized snapshot submissions mesh parameters")
+	log.Debug("Configuration: Using gossipconfig package with anti-pruning optimizations")
 
 	// Initialize stream pool
 	if err := InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize); err != nil {
