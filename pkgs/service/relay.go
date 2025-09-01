@@ -258,23 +258,13 @@ func EstablishSequencerConnection() error {
 	sequencerMu.Lock()
 	defer sequencerMu.Unlock()
 
-	// Clear existing connection if any
-	if SequencerHostConn != nil {
-		if err := SequencerHostConn.Close(); err != nil {
-			log.Warnf("Error closing existing connection: %v", err)
+	// Only create host if it doesn't exist (initial connection)
+	if SequencerHostConn == nil {
+		// 1. Create properly configured host
+		if err := CreateLibP2pHost(); err != nil {
+			return fmt.Errorf("failed to create libp2p host: %w", err)
 		}
-		// Important: Signal that connection is being reset
-		// This should trigger cleanup of existing stream pool
-		SequencerHostConn = nil
-		SequencerID = ""
 	}
-
-	// 1. Create properly configured host
-	if err := CreateLibP2pHost(); err != nil {
-		return fmt.Errorf("failed to create libp2p host: %w", err)
-	}
-
-	// No need to reassign SequencerHostConn as it's already set in CreateLibP2pHost()
 
 	// 2. Get sequencer info
 	sequencer, err := fetchSequencer(
@@ -314,6 +304,66 @@ func EstablishSequencerConnection() error {
 	return nil
 }
 
+// RefreshSequencerConnection refreshes only the sequencer connection without affecting gossipsub
+func RefreshSequencerConnection() error {
+	sequencerMu.Lock()
+	defer sequencerMu.Unlock()
+
+	if SequencerHostConn == nil {
+		return fmt.Errorf("host connection not initialized")
+	}
+
+	// Get sequencer info
+	sequencer, err := fetchSequencer(
+		"https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/sequencers.json",
+		config.SettingsObj.DataMarketAddress,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to fetch sequencer info: %w", err)
+	}
+
+	// Parse multiaddr and create peer info
+	maddr, err := ma.NewMultiaddr(sequencer.Maddr)
+	if err != nil {
+		return fmt.Errorf("failed to parse multiaddr: %w", err)
+	}
+
+	sequencerInfo, err := peer.AddrInfoFromP2pAddr(maddr)
+	if err != nil {
+		return fmt.Errorf("failed to get addr info: %w", err)
+	}
+
+	// Check if we're already connected to the right sequencer
+	if SequencerID == sequencerInfo.ID {
+		// Check connection status
+		if SequencerHostConn.Network().Connectedness(SequencerID) == network.Connected {
+			log.Debugf("Already connected to sequencer %s, skipping refresh", SequencerID)
+			return nil
+		}
+	}
+
+	// Close existing connection to sequencer only (not the entire host)
+	if SequencerID != "" {
+		if err := SequencerHostConn.Network().ClosePeer(SequencerID); err != nil {
+			log.Warnf("Error closing connection to previous sequencer: %v", err)
+		}
+	}
+
+	// Update sequencer ID
+	SequencerID = sequencerInfo.ID
+
+	// Establish new connection
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := SequencerHostConn.Connect(ctx, *sequencerInfo); err != nil {
+		return fmt.Errorf("failed to connect to sequencer: %w", err)
+	}
+
+	log.Infof("Successfully refreshed connection to Sequencer: %s with ID: %s", sequencer.Maddr, SequencerID.String())
+	return nil
+}
+
 func StartConnectionRefreshLoop(ctx context.Context) {
 	ticker := time.NewTicker(config.SettingsObj.ConnectionRefreshInterval)
 	defer ticker.Stop()
@@ -323,10 +373,10 @@ func StartConnectionRefreshLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			log.Info("🔄 Starting periodic connection refresh cycle")
+			log.Info("🔄 Starting periodic stream pool refresh")
 
 			connectionRefreshing.Store(true)
-			log.Info("🚫 Connection refresh state activated - new streams will wait")
+			log.Info("🚫 Stream pool refresh state activated - new streams will wait")
 
 			pool := GetLibp2pStreamPool()
 			if pool == nil {
@@ -383,13 +433,12 @@ func StartConnectionRefreshLoop(ctx context.Context) {
 				time.Sleep(2 * time.Second)
 			}
 
-			log.Info("🔌 Refreshing connection to sequencer")
-			if err := EstablishSequencerConnection(); err != nil {
-				log.Errorf("❌ Failed to refresh connection: %v", err)
-				connectionRefreshing.Store(false)
-				continue
+			log.Info("🔌 Refreshing sequencer connection (keeping gossipsub intact)")
+			if err := RefreshSequencerConnection(); err != nil {
+				log.Errorf("❌ Failed to refresh sequencer connection: %v", err)
+				// Don't give up - gossipsub is still intact
 			}
-			log.Info("✅ New connection established successfully")
+			log.Info("✅ Sequencer connection refresh completed")
 
 			log.Info("🏊 Rebuilding stream pool")
 			if err := RebuildStreamPool(); err != nil {
