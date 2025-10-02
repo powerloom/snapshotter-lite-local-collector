@@ -16,7 +16,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /snapshotter-local-collector ./cmd/main.go
 
 # Use a minimal base image
-FROM sdebian:bookworm-slim
+FROM debian:bookworm-slim
 
 # Copy SSL certificates from the builder stage
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
