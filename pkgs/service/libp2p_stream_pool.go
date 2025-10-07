@@ -249,12 +249,10 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 		// Get current connection state
 		hostConn, seqId, err := GetSequencerConnection()
 		if err != nil {
-			log.Warnf("Connection to sequencer lost, will retry: %v", err)
 			return fmt.Errorf("sequencer connection lost: %w", err)
 		}
 
 		if hostConn.Network().Connectedness(seqId) != network.Connected {
-			log.Warn("Connection to sequencer not active, will retry")
 			return fmt.Errorf("connection to sequencer lost")
 		}
 
@@ -262,6 +260,7 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 		if err != nil {
 			return fmt.Errorf("stream creation failed: %w", err)
 		}
+
 		return nil
 	}
 
@@ -271,7 +270,7 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 
 	err := backoff.Retry(operation, backOff)
 	if err != nil {
-		// Only terminate after all retries are exhausted
+		log.Errorf("Failed to create stream after retries: %v", err)
 		return nil, fmt.Errorf("failed to create stream after retries: %w", err)
 	}
 
