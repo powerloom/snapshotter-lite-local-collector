@@ -157,13 +157,14 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 	var topic *pubsub.Topic
 	
 	// Use epoch 0 for discovery/joining room, or current epoch for submissions
+	discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
 	if submission.Request.EpochId == 0 {
-		topicString = "/powerloom/snapshot-submissions/0"
+		topicString = discoveryTopic
 		topic = s.discoveryTopic
 	} else {
 		// For now, use the "all" topic for all non-zero epochs
 		// This simplifies discovery and reduces topic proliferation
-		topicString = "/powerloom/snapshot-submissions/all"
+		topicString = submissionsTopic
 		topic = s.submissionsTopic
 	}
 	
@@ -228,7 +229,8 @@ func (s *server) quickDiscoverPeers() {
 	routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
 	
 	// Try discovery on epoch 0 (joining room)
-	peerChan, err := routingDiscovery.FindPeers(ctx, "/powerloom/snapshot-submissions/0")
+	discoveryTopic, _ := config.SettingsObj.GetSnapshotSubmissionTopics()
+	peerChan, err := routingDiscovery.FindPeers(ctx, discoveryTopic)
 	if err != nil {
 		log.Debugf("Quick discovery failed: %v", err)
 		return
@@ -442,16 +444,18 @@ func GracefulShutdownServer(s pkgs.SubmissionServer) {
 // initializeTopics sets up the two-level topic architecture
 func (s *server) initializeTopics() {
 	ctx := context.Background()
-	
+
+	// Get configurable topic names
+	discoveryTopicName, submissionsTopicName := config.SettingsObj.GetSnapshotSubmissionTopics()
+
 	// Join the discovery/joining room (repurposed epoch 0)
-	discoveryTopicName := "/powerloom/snapshot-submissions/0"
 	topic, err := s.pubsub.Join(discoveryTopicName)
 	if err != nil {
 		log.Errorf("Failed to join discovery topic: %v", err)
 		return
 	}
 	s.discoveryTopic = topic
-	
+
 	// Subscribe to discovery topic to be a proper participant
 	discoverySub, err := topic.Subscribe()
 	if err != nil {
@@ -499,7 +503,6 @@ func (s *server) initializeTopics() {
 	}()
 	
 	// Join the main submissions topic for all epochs
-	submissionsTopicName := "/powerloom/snapshot-submissions/all"
 	topic, err = s.pubsub.Join(submissionsTopicName)
 	if err != nil {
 		log.Errorf("Failed to join submissions topic: %v", err)
@@ -589,23 +592,24 @@ func (s *server) publishHeartbeats() {
 		}
 		
 		// Publish to BOTH topics to maintain presence everywhere
+		discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
 		if s.discoveryTopic != nil {
 			if err := s.discoveryTopic.Publish(context.Background(), msgBytes); err != nil {
 				log.Debugf("Failed to publish heartbeat to discovery: %v", err)
 			} else {
-				peersCount := len(s.pubsub.ListPeers("/powerloom/snapshot-submissions/0"))
+				peersCount := len(s.pubsub.ListPeers(discoveryTopic))
 				if messageCounter%6 == 0 { // Log every minute
 					log.Debugf("Published heartbeat to discovery topic, peers: %d", peersCount)
 				}
 			}
 		}
-		
+
 		// Also publish to submissions topic
 		if s.submissionsTopic != nil {
 			if err := s.submissionsTopic.Publish(context.Background(), msgBytes); err != nil {
 				log.Debugf("Failed to publish heartbeat to submissions: %v", err)
 			} else {
-				peersCount := len(s.pubsub.ListPeers("/powerloom/snapshot-submissions/all"))
+				peersCount := len(s.pubsub.ListPeers(submissionsTopic))
 				if messageCounter%6 == 0 { // Log every minute
 					log.Debugf("Published heartbeat to submissions topic, peers: %d", peersCount)
 				}
@@ -624,8 +628,9 @@ func (s *server) monitorMeshStatus() {
 	
 	for range ticker.C {
 		// Check peer counts for both topics
-		discoveryPeers := len(s.pubsub.ListPeers("/powerloom/snapshot-submissions/0"))
-		submissionPeers := len(s.pubsub.ListPeers("/powerloom/snapshot-submissions/all"))
+		discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
+		discoveryPeers := len(s.pubsub.ListPeers(discoveryTopic))
+		submissionPeers := len(s.pubsub.ListPeers(submissionsTopic))
 		
 		// CRITICAL: Detect and recover from pruning
 		if discoveryPeers == 0 || submissionPeers == 0 {
@@ -650,25 +655,26 @@ func (s *server) monitorMeshStatus() {
 					routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
 					ctx := context.Background()
 					
+					discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
 					// Re-advertise on discovery topic
-					util.Advertise(ctx, routingDiscovery, "/powerloom/snapshot-submissions/0")
+					util.Advertise(ctx, routingDiscovery, discoveryTopic)
 					log.Debug("Re-advertised on discovery topic")
-					
+
 					// Re-advertise on submissions topic
-					util.Advertise(ctx, routingDiscovery, "/powerloom/snapshot-submissions/all")
+					util.Advertise(ctx, routingDiscovery, submissionsTopic)
 					log.Debug("Re-advertised on submissions topic")
-					
+
 					// Re-join topics if needed
 					s.topicsMu.Lock()
 					if s.discoveryTopic == nil {
-						topic, err := s.pubsub.Join("/powerloom/snapshot-submissions/0")
+						topic, err := s.pubsub.Join(discoveryTopic)
 						if err == nil {
 							s.discoveryTopic = topic
 							log.Info("Re-joined discovery topic")
 						}
 					}
 					if s.submissionsTopic == nil {
-						topic, err := s.pubsub.Join("/powerloom/snapshot-submissions/all")
+						topic, err := s.pubsub.Join(submissionsTopic)
 						if err == nil {
 							s.submissionsTopic = topic
 							log.Info("Re-joined submissions topic")

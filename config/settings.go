@@ -23,6 +23,9 @@ type Settings struct {
 	MaxStreamPoolSize      int
 	DataMarketInRequest    bool
 
+	// Gossipsub Configuration
+	GossipsubSnapshotSubmissionPrefix string
+
 	// Stream Pool Configuration
 	StreamHealthCheckTimeout time.Duration
 	StreamWriteTimeout       time.Duration
@@ -50,6 +53,7 @@ func LoadConfig() {
 		config.PortNumber = "50051" // Default value
 	}
 	config.RendezvousPoint = getEnvWithDefault("RENDEZVOUS_POINT", "powerloom-snapshot-sequencer-network")
+	config.GossipsubSnapshotSubmissionPrefix = getEnvWithDefault("GOSSIPSUB_SNAPSHOT_SUBMISSION_PREFIX", "/powerloom/snapshot-submissions")
 
 	if contract := os.Getenv("DATA_MARKET_CONTRACT"); contract == "" {
 		log.Fatal("DATA_MARKET_CONTRACT environment variable is required")
@@ -104,6 +108,13 @@ func getEnvAsInt(key string, defaultValue int) int {
 		log.Warnf("Invalid value for %s, using default: %d", key, defaultValue)
 	}
 	return defaultValue
+}
+
+// GetSnapshotSubmissionTopics returns the discovery and submissions topic names
+func (s *Settings) GetSnapshotSubmissionTopics() (discoveryTopic, submissionsTopic string) {
+	discoveryTopic = s.GossipsubSnapshotSubmissionPrefix + "/0"
+	submissionsTopic = s.GossipsubSnapshotSubmissionPrefix + "/all"
+	return discoveryTopic, submissionsTopic
 }
 
 func loadPrivateKey() string {
