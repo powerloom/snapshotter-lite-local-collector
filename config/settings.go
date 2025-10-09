@@ -41,6 +41,7 @@ type Settings struct {
 	ConnManagerLowWater       int
 	ConnManagerHighWater      int
 	PublicIP                  string
+	DSVRendezvousPoint        string
 }
 
 func LoadConfig() {
@@ -89,6 +90,7 @@ func LoadConfig() {
 	config.ConnManagerLowWater = getEnvAsInt("CONN_MANAGER_LOW_WATER", 10000)
 	config.ConnManagerHighWater = getEnvAsInt("CONN_MANAGER_HIGH_WATER", 40000)
 	config.PublicIP = os.Getenv("PUBLIC_IP")
+	config.DSVRendezvousPoint = config.RendezvousPoint // Use the same RENDEZVOUS_POINT for DSV discovery
 
 	SettingsObj = &config
 }

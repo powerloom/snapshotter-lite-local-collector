@@ -15,6 +15,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
 	log "github.com/sirupsen/logrus"
@@ -557,13 +558,110 @@ func (s *server) initializeTopics() {
 		}
 	}()
 	
+	// Start DSV rendezvous point discovery for better peer finding
+	go s.startDSVRendezvousDiscovery()
+
 	// Start heartbeat publisher to maintain mesh presence
 	go s.publishHeartbeats()
-	
+
 	// Start periodic mesh status checker
 	go s.monitorMeshStatus()
-	
-	log.Info("Two-level topic architecture initialized with active participation")
+
+	log.Info("Two-level topic architecture initialized with active participation and DSV rendezvous discovery")
+}
+
+// startDSVRendezvousDiscovery implements rendezvous point discovery for finding DSV nodes
+func (s *server) startDSVRendezvousDiscovery() {
+	ctx := context.Background()
+
+	// Use the DSV rendezvous point for discovery
+	dsvRendezvousPoint := config.SettingsObj.DSVRendezvousPoint
+	if dsvRendezvousPoint == "" {
+		log.Warn("DSV_RENDEZVOUS_POINT not configured, skipping DSV rendezvous discovery")
+		return
+	}
+
+	log.Infof("Starting DSV rendezvous point discovery on: %s", dsvRendezvousPoint)
+
+	routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
+
+	// Advertise our presence on the DSV rendezvous point
+	go func() {
+		log.Infof("Advertising on DSV rendezvous point: %s", dsvRendezvousPoint)
+
+		// Initial advertising
+		util.Advertise(ctx, routingDiscovery, dsvRendezvousPoint)
+
+		// Continuous advertising with retries
+		ticker := time.NewTicker(5 * time.Minute) // Re-advertise every 5 minutes
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				util.Advertise(ctx, routingDiscovery, dsvRendezvousPoint)
+				log.Debugf("Re-advertised on DSV rendezvous point: %s", dsvRendezvousPoint)
+			}
+		}
+	}()
+
+	// Continuously discover peers from the DSV rendezvous point
+	go func() {
+		ticker := time.NewTicker(30 * time.Second) // Discover peers every 30 seconds
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.discoverDSVPeers(ctx, routingDiscovery, dsvRendezvousPoint)
+			}
+		}
+	}()
+}
+
+// discoverDSVPeers finds and connects to DSV nodes through the rendezvous point
+func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing.RoutingDiscovery, rendezvousPoint string) {
+	log.Debugf("Searching for DSV peers on rendezvous point: %s", rendezvousPoint)
+
+	peerChan, err := routingDiscovery.FindPeers(ctx, rendezvousPoint)
+	if err != nil {
+		log.Debugf("Error discovering DSV peers: %v", err)
+		return
+	}
+
+	connectedCount := 0
+	for p := range peerChan {
+		if p.ID == deps.hostConn.ID() {
+			continue // Skip ourselves
+		}
+
+		// Check if already connected
+		if deps.hostConn.Network().Connectedness(p.ID) == network.Connected {
+			continue // Already connected
+		}
+
+		// Try to connect to the discovered peer
+		if err := deps.hostConn.Connect(ctx, p); err != nil {
+			log.Debugf("Failed to connect to DSV peer %s: %v", p.ID, err)
+		} else {
+			connectedCount++
+			log.Infof("✅ Connected to DSV peer via rendezvous: %s", p.ID)
+
+			// Limit connections per discovery round
+			if connectedCount >= 3 {
+				log.Debugf("Reached connection limit for this discovery round")
+				break
+			}
+		}
+	}
+
+	if connectedCount > 0 {
+		log.Infof("DSV rendezvous discovery completed: connected to %d new peers", connectedCount)
+	}
 }
 
 // publishHeartbeats sends frequent heartbeat messages to maintain mesh membership
