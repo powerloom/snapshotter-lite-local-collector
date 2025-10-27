@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -35,7 +36,8 @@ type Settings struct {
 
 	// Connection management settings
 	ConnectionRefreshInterval time.Duration
-	BootstrapNodeAddr         string
+	BootstrapNodeAddr         string   // Legacy single bootstrap node (for backward compatibility)
+	BootstrapNodeAddrs        []string // New multiple bootstrap nodes support
 	LocalCollectorP2PPort     string
 	RendezvousPoint           string
 	ConnManagerLowWater       int
@@ -84,7 +86,10 @@ func LoadConfig() {
 
 	// Add connection refresh interval setting (default 5 minutes)
 	config.ConnectionRefreshInterval = time.Duration(getEnvAsInt("CONNECTION_REFRESH_INTERVAL_SEC", 300)) * time.Second
-	config.BootstrapNodeAddr = os.Getenv("BOOTSTRAP_NODE_ADDR")
+
+	// Load bootstrap nodes with backward compatibility
+	loadBootstrapNodes(&config)
+
 	config.LocalCollectorP2PPort = getEnvWithDefault("LOCAL_COLLECTOR_P2P_PORT", "9100")
 
 	config.ConnManagerLowWater = getEnvAsInt("CONN_MANAGER_LOW_WATER", 10000)
@@ -117,6 +122,35 @@ func (s *Settings) GetSnapshotSubmissionTopics() (discoveryTopic, submissionsTop
 	discoveryTopic = s.GossipsubSnapshotSubmissionPrefix + "/0"
 	submissionsTopic = s.GossipsubSnapshotSubmissionPrefix + "/all"
 	return discoveryTopic, submissionsTopic
+}
+
+func loadBootstrapNodes(config *Settings) {
+	// Try BOOTSTRAP_NODE_ADDRS first (comma-separated)
+	bootstrapAddrsStr := os.Getenv("BOOTSTRAP_NODE_ADDRS")
+	if bootstrapAddrsStr != "" {
+		// Parse comma-separated addresses
+		addresses := strings.Split(bootstrapAddrsStr, ",")
+		for i, addr := range addresses {
+			addresses[i] = strings.TrimSpace(addr)
+			if addresses[i] != "" {
+				config.BootstrapNodeAddrs = append(config.BootstrapNodeAddrs, addresses[i])
+			}
+		}
+
+		if len(config.BootstrapNodeAddrs) > 0 {
+			log.Infof("Loaded %d bootstrap nodes from BOOTSTRAP_NODE_ADDRS", len(config.BootstrapNodeAddrs))
+		}
+	}
+
+	// Fallback to legacy BOOTSTRAP_NODE_ADDR for backward compatibility
+	if len(config.BootstrapNodeAddrs) == 0 {
+		singleAddr := os.Getenv("BOOTSTRAP_NODE_ADDR")
+		if singleAddr != "" {
+			config.BootstrapNodeAddr = singleAddr
+			config.BootstrapNodeAddrs = []string{singleAddr}
+			log.Info("Using legacy BOOTSTRAP_NODE_ADDR for backward compatibility")
+		}
+	}
 }
 
 func loadPrivateKey() string {

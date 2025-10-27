@@ -202,49 +202,8 @@ func CreateLibP2pHost() error {
 		},
 	})
 
-	// Connect to bootstrap node if configured
-	if config.SettingsObj.BootstrapNodeAddr != "" {
-		log.Infof("Attempting to connect to bootstrap node: %s", config.SettingsObj.BootstrapNodeAddr)
-		bootstrapMA, err := ma.NewMultiaddr(config.SettingsObj.BootstrapNodeAddr)
-		if err != nil {
-			log.Errorf("Invalid bootstrap multiaddress: %v", err)
-		} else {
-			bootstrapInfo, err := peer.AddrInfoFromP2pAddr(bootstrapMA)
-			if err != nil {
-				log.Errorf("Failed to parse bootstrap peer info: %v", err)
-			} else {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				if err := SequencerHostConn.Connect(ctx, *bootstrapInfo); err != nil {
-					log.Errorf("Failed to connect to bootstrap node %s: %v", config.SettingsObj.BootstrapNodeAddr, err)
-				} else {
-					log.Infof("Successfully connected to bootstrap node: %s", config.SettingsObj.BootstrapNodeAddr)
-				}
-			}
-		}
-	}
-
-	// Connect to bootstrap node if configured
-	if config.SettingsObj.BootstrapNodeAddr != "" {
-		log.Infof("Attempting to connect to bootstrap node: %s", config.SettingsObj.BootstrapNodeAddr)
-		bootstrapMA, err := ma.NewMultiaddr(config.SettingsObj.BootstrapNodeAddr)
-		if err != nil {
-			log.Errorf("Invalid bootstrap multiaddress: %v", err)
-		} else {
-			bootstrapInfo, err := peer.AddrInfoFromP2pAddr(bootstrapMA)
-			if err != nil {
-				log.Errorf("Failed to parse bootstrap peer info: %v", err)
-			} else {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				if err := SequencerHostConn.Connect(ctx, *bootstrapInfo); err != nil {
-					log.Errorf("Failed to connect to bootstrap node %s: %v", config.SettingsObj.BootstrapNodeAddr, err)
-				} else {
-					log.Infof("Successfully connected to bootstrap node: %s", config.SettingsObj.BootstrapNodeAddr)
-				}
-			}
-		}
-	}
+	// Connect to bootstrap nodes if configured
+	connectToBootstrapNodes(config.SettingsObj.BootstrapNodeAddrs, SequencerHostConn)
 
 	log.Infof("✅ LibP2P host created. ID: %s", SequencerHostConn.ID().String())
 	log.Infof("Listening on addresses: %s", SequencerHostConn.Addrs())
@@ -449,4 +408,51 @@ func StartConnectionRefreshLoop(ctx context.Context) {
 			log.Info("✅ Connection refresh cycle completed successfully")
 		}
 	}
+}
+
+// connectToBootstrapNodes connects to multiple bootstrap nodes concurrently
+func connectToBootstrapNodes(bootstrapAddrs []string, host host.Host) {
+	if len(bootstrapAddrs) == 0 {
+		log.Debug("No bootstrap nodes configured")
+		return
+	}
+
+	log.Infof("Attempting to connect to %d bootstrap nodes", len(bootstrapAddrs))
+
+	var wg sync.WaitGroup
+	for i, addr := range bootstrapAddrs {
+		if addr == "" {
+			continue
+		}
+
+		wg.Add(1)
+		go func(index int, bootstrapAddr string) {
+			defer wg.Done()
+
+			log.Infof("Connecting to bootstrap node %d: %s", index+1, bootstrapAddr)
+			bootstrapMA, err := ma.NewMultiaddr(bootstrapAddr)
+			if err != nil {
+				log.Errorf("Invalid bootstrap multiaddr %d: %v", index+1, err)
+				return
+			}
+
+			bootstrapInfo, err := peer.AddrInfoFromP2pAddr(bootstrapMA)
+			if err != nil {
+				log.Errorf("Failed to parse bootstrap peer info %d: %v", index+1, err)
+				return
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			if err := host.Connect(ctx, *bootstrapInfo); err != nil {
+				log.Errorf("Failed to connect to bootstrap node %d (%s): %v", index+1, bootstrapAddr, err)
+			} else {
+				log.Infof("Successfully connected to bootstrap node %d: %s", index+1, bootstrapAddr)
+			}
+		}(i, addr)
+	}
+
+	wg.Wait()
+	log.Info("Bootstrap node connection attempts completed")
 }

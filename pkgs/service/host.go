@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"proto-snapshot-server/config"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,7 +23,7 @@ import (
 )
 
 // NewHost creates a new libp2p host and connects to bootstrap peers.
-func NewHost(ctx context.Context, bootstrapPeers string, listenerPort string) (h host.Host, kademliaDHT *dht.IpfsDHT, err error) {
+func NewHost(ctx context.Context, bootstrapPeers []string, listenerPort string) (h host.Host, kademliaDHT *dht.IpfsDHT, err error) {
 	listenAddr := fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", listenerPort)
 
 	// 1. Create a new resource manager with custom limits.
@@ -104,7 +103,7 @@ func NewHost(ctx context.Context, bootstrapPeers string, listenerPort string) (h
 	}
 	log.Infof("Collector DHT routing table size: %d", kademliaDHT.RoutingTable().Size()) // ADDED
 
-	if bootstrapPeers != "" {
+	if len(bootstrapPeers) > 0 {
 		ConnectToBootstrapPeers(ctx, h, bootstrapPeers)
 	}
 
@@ -123,32 +122,31 @@ func NewHost(ctx context.Context, bootstrapPeers string, listenerPort string) (h
 }
 
 // ConnectToBootstrapPeers connects the host to a list of bootstrap peers.
-func ConnectToBootstrapPeers(ctx context.Context, h host.Host, peers string) {
-	peerStrings := strings.Split(peers, ",")
+func ConnectToBootstrapPeers(ctx context.Context, h host.Host, peers []string) {
 	var wg sync.WaitGroup
-	for _, peerString := range peerStrings {
+	for i, peerString := range peers {
 		if peerString == "" {
 			continue
 		}
 		wg.Add(1)
-		go func(peerString string) {
+		go func(index int, peerString string) {
 			defer wg.Done()
 			addr, err := multiaddr.NewMultiaddr(peerString)
 			if err != nil {
-				log.Errorf("Failed to parse multiaddr: %v", err)
+				log.Errorf("Failed to parse multiaddr %d: %v", index+1, err)
 				return
 			}
 			peerInfo, err := peer.AddrInfoFromP2pAddr(addr)
 			if err != nil {
-				log.Errorf("Failed to get peer info from multiaddr: %v", err)
+				log.Errorf("Failed to get peer info from multiaddr %d: %v", index+1, err)
 				return
 			}
 			if err := h.Connect(ctx, *peerInfo); err != nil {
-				log.Errorf("Failed to connect to bootstrap peer %s: %v", peerString, err)
+				log.Errorf("Failed to connect to bootstrap peer %d (%s): %v", index+1, peerString, err)
 			} else {
-				log.Infof("Successfully connected to bootstrap peer: %s", peerString)
+				log.Infof("Successfully connected to bootstrap peer %d: %s", index+1, peerString)
 			}
-		}(peerString)
+		}(i, peerString)
 	}
 	wg.Wait()
 }
