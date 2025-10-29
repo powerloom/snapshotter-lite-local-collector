@@ -6,7 +6,7 @@
 SHARED_KEYS_DIR="/keys"
 P2P_PRIVATE_KEY_FILE="$SHARED_KEYS_DIR/p2p_private_key"
 P2P_READY_FILE="$SHARED_KEYS_DIR/p2p_ready"
-MAX_WAIT_TIME=60
+MAX_WAIT_TIME=30
 WAIT_INTERVAL=2
 
 echo "🚀 Local Collector Entry Point with P2P Key Wait"
