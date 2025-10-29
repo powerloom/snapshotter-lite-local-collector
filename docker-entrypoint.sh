@@ -53,13 +53,6 @@ wait_for_p2p_keys() {
             # Set the private key as environment variable for the local collector
             export LOCAL_COLLECTOR_PRIVATE_KEY=$(cat "$P2P_PRIVATE_KEY_FILE")
 
-            # Also set peer ID if available
-            local peer_id_file="$SHARED_KEYS_DIR/p2p_peer_id"
-            if [ -f "$peer_id_file" ]; then
-                export LOCAL_COLLECTOR_PEER_ID=$(cat "$peer_id_file")
-                echo "🆔 Peer ID loaded: ${LOCAL_COLLECTOR_PEER_ID:0:20}..."
-            fi
-
             echo "🔑 P2P private key loaded into environment"
             return 0
         fi
