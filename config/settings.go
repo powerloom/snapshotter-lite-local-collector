@@ -34,6 +34,9 @@ type Settings struct {
 
 	// Connection management settings
 	ConnectionRefreshInterval time.Duration
+	
+	// Semaphore acquisition timeout
+	WriteSemaphoreTimeout time.Duration
 }
 
 func LoadConfig() {
@@ -78,6 +81,9 @@ func LoadConfig() {
 
 	// Add connection refresh interval setting (default 5 minutes)
 	config.ConnectionRefreshInterval = time.Duration(getEnvAsInt("CONNECTION_REFRESH_INTERVAL_SEC", 300)) * time.Second
+
+	// Add write semaphore timeout (default 5 seconds)
+	config.WriteSemaphoreTimeout = time.Duration(getEnvAsInt("WRITE_SEMAPHORE_TIMEOUT_SEC", 5)) * time.Second
 
 	SettingsObj = &config
 }

@@ -104,12 +104,20 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	b.MaxElapsedTime = 30 * time.Second
 
 	err = backoff.Retry(func() error {
-		// First get writeSemaphore for GRPC concurrency control
+		// Acquire writeSemaphore with timeout to prevent indefinite blocking
+		// This allows requests to wait for capacity instead of immediately failing
+		// The timeout prevents requests from blocking indefinitely when the system is overloaded
+		ctx, cancel := context.WithTimeout(context.Background(), config.SettingsObj.WriteSemaphoreTimeout)
+		defer cancel()
+		
 		select {
 		case s.writeSemaphore <- struct{}{}:
+			// Successfully acquired semaphore, defer release
 			defer func() { <-s.writeSemaphore }()
-		default:
-			return fmt.Errorf("server at capacity") // Non-retriable
+		case <-ctx.Done():
+			// Timeout waiting for semaphore - retriable error
+			// This allows the backoff mechanism to retry after a delay
+			return fmt.Errorf("timeout waiting for write capacity")
 		}
 
 		// Then try to write
