@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -24,6 +25,9 @@ type Settings struct {
 	MaxStreamPoolSize      int
 	DataMarketInRequest    bool
 
+	// Gossipsub Configuration
+	GossipsubSnapshotSubmissionPrefix string
+
 	// Stream Pool Configuration
 	StreamHealthCheckTimeout time.Duration
 	StreamWriteTimeout       time.Duration
@@ -34,7 +38,15 @@ type Settings struct {
 
 	// Connection management settings
 	ConnectionRefreshInterval time.Duration
-	
+	BootstrapNodeAddr         string   // Legacy single bootstrap node (for backward compatibility)
+	BootstrapNodeAddrs        []string // New multiple bootstrap nodes support
+	LocalCollectorP2PPort     string
+	RendezvousPoint           string
+	ConnManagerLowWater       int
+	ConnManagerHighWater      int
+	PublicIP                  string
+	DSVRendezvousPoint        string
+
 	// Semaphore acquisition timeout
 	WriteSemaphoreTimeout time.Duration
 }
@@ -48,6 +60,8 @@ func LoadConfig() {
 	} else {
 		config.PortNumber = "50051" // Default value
 	}
+	config.RendezvousPoint = getEnvWithDefault("RENDEZVOUS_POINT", "powerloom-snapshot-sequencer-network")
+	config.GossipsubSnapshotSubmissionPrefix = getEnvWithDefault("GOSSIPSUB_SNAPSHOT_SUBMISSION_PREFIX", "/powerloom/snapshot-submissions")
 
 	if contract := os.Getenv("DATA_MARKET_CONTRACT"); contract == "" {
 		log.Fatal("DATA_MARKET_CONTRACT environment variable is required")
@@ -82,6 +96,16 @@ func LoadConfig() {
 	// Add connection refresh interval setting (default 5 minutes)
 	config.ConnectionRefreshInterval = time.Duration(getEnvAsInt("CONNECTION_REFRESH_INTERVAL_SEC", 300)) * time.Second
 
+	// Load bootstrap nodes with backward compatibility
+	loadBootstrapNodes(&config)
+
+	config.LocalCollectorP2PPort = getEnvWithDefault("LOCAL_COLLECTOR_P2P_PORT", "9100")
+
+	config.ConnManagerLowWater = getEnvAsInt("CONN_MANAGER_LOW_WATER", 10000)
+	config.ConnManagerHighWater = getEnvAsInt("CONN_MANAGER_HIGH_WATER", 40000)
+	config.PublicIP = os.Getenv("PUBLIC_IP")
+	config.DSVRendezvousPoint = config.RendezvousPoint // Use the same RENDEZVOUS_POINT for DSV discovery
+
 	// Add write semaphore timeout (default 5 seconds)
 	config.WriteSemaphoreTimeout = time.Duration(getEnvAsInt("WRITE_SEMAPHORE_TIMEOUT_SEC", 5)) * time.Second
 
@@ -103,6 +127,42 @@ func getEnvAsInt(key string, defaultValue int) int {
 		log.Warnf("Invalid value for %s, using default: %d", key, defaultValue)
 	}
 	return defaultValue
+}
+
+// GetSnapshotSubmissionTopics returns the discovery and submissions topic names
+func (s *Settings) GetSnapshotSubmissionTopics() (discoveryTopic, submissionsTopic string) {
+	discoveryTopic = s.GossipsubSnapshotSubmissionPrefix + "/0"
+	submissionsTopic = s.GossipsubSnapshotSubmissionPrefix + "/all"
+	return discoveryTopic, submissionsTopic
+}
+
+func loadBootstrapNodes(config *Settings) {
+	// Try BOOTSTRAP_NODE_ADDRS first (comma-separated)
+	bootstrapAddrsStr := os.Getenv("BOOTSTRAP_NODE_ADDRS")
+	if bootstrapAddrsStr != "" {
+		// Parse comma-separated addresses
+		addresses := strings.Split(bootstrapAddrsStr, ",")
+		for i, addr := range addresses {
+			addresses[i] = strings.TrimSpace(addr)
+			if addresses[i] != "" {
+				config.BootstrapNodeAddrs = append(config.BootstrapNodeAddrs, addresses[i])
+			}
+		}
+
+		if len(config.BootstrapNodeAddrs) > 0 {
+			log.Infof("Loaded %d bootstrap nodes from BOOTSTRAP_NODE_ADDRS", len(config.BootstrapNodeAddrs))
+		}
+	}
+
+	// Fallback to legacy BOOTSTRAP_NODE_ADDR for backward compatibility
+	if len(config.BootstrapNodeAddrs) == 0 {
+		singleAddr := os.Getenv("BOOTSTRAP_NODE_ADDR")
+		if singleAddr != "" {
+			config.BootstrapNodeAddr = singleAddr
+			config.BootstrapNodeAddrs = []string{singleAddr}
+			log.Info("Using legacy BOOTSTRAP_NODE_ADDR for backward compatibility")
+		}
+	}
 }
 
 func loadPrivateKey() string {
