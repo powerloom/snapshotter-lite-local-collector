@@ -64,15 +64,15 @@ func InitializeService() error {
 	deps.hostConn = P2PHost
 	deps.sequencerID = SequencerID
 
-	// Give DHT some time to bootstrap and discover peers
-	log.Info("Waiting 30 seconds for DHT to discover peers...")
-	time.Sleep(30 * time.Second)
-
 	// Configure DHT for peer discovery
 	deps.dht = ConfigureDHT(context.Background(), deps.hostConn)
 	if deps.dht == nil {
 		return fmt.Errorf("failed to configure DHT")
 	}
+
+	// Give DHT some time to bootstrap and discover peers after configuration
+	log.Info("Waiting 30 seconds for DHT to discover peers...")
+	time.Sleep(30 * time.Second)
 
 	var err error
 
