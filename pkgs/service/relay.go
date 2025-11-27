@@ -76,10 +76,22 @@ func CreateLibP2pHost() error {
 	var err error
 	TcpAddr, _ = ma.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", config.SettingsObj.LocalCollectorP2PPort))
 
+	// Use configurable connection manager limits (defaults match DSV nodes: 1000/4000)
+	// Lower limits help prune random IPFS peers and keep only DSV nodes
+	connLowWater := config.SettingsObj.ConnManagerLowWater
+	connHighWater := config.SettingsObj.ConnManagerHighWater
+	if connLowWater == 0 {
+		connLowWater = 1000 // Default if not configured
+	}
+	if connHighWater == 0 {
+		connHighWater = 4000 // Default if not configured
+	}
+
 	ConnManager, _ = connmgr.NewConnManager(
-		40960,
-		81920,
+		connLowWater,
+		connHighWater,
 		connmgr.WithGracePeriod(1*time.Minute))
+	log.Infof("Connection manager configured: LowWater=%d, HighWater=%d", connLowWater, connHighWater)
 
 	scalingLimits := rcmgr.DefaultLimits
 
@@ -94,7 +106,17 @@ func CreateLibP2pHost() error {
 			Streams:         rcmgr.Unlimited,
 			Conns:           rcmgr.Unlimited,
 			ConnsOutbound:   rcmgr.Unlimited,
-			ConnsInbound:    rcmgr.Unlimited,
+			ConnsInbound:    rcmgr.Unlimited, // Allow many inbound connections
+			FD:              rcmgr.Unlimited,
+			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
+		},
+		Transient: rcmgr.ResourceLimits{
+			StreamsOutbound: rcmgr.Unlimited,
+			StreamsInbound:  rcmgr.Unlimited,
+			Streams:         rcmgr.Unlimited,
+			Conns:           rcmgr.Unlimited,
+			ConnsOutbound:   rcmgr.Unlimited,
+			ConnsInbound:    rcmgr.Unlimited, // Allow transient inbound connections
 			FD:              rcmgr.Unlimited,
 			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
 		},
