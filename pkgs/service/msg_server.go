@@ -586,6 +586,49 @@ func (s *server) initializeTopics() {
 		}
 	}()
 
+	// Discover peers on topic names (in addition to rendezvous point)
+	go func() {
+		time.Sleep(15 * time.Second) // Wait for DHT to stabilize
+		routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
+
+		// Discover peers on both topics periodically
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// Discover peers on discovery topic
+				log.Debugf("Discovering peers on topic: %s", discoveryTopicName)
+				peerChan, err := routingDiscovery.FindPeers(ctx, discoveryTopicName)
+				if err == nil {
+					for p := range peerChan {
+						if p.ID != deps.hostConn.ID() && deps.hostConn.Network().Connectedness(p.ID) != network.Connected {
+							if err := deps.hostConn.Connect(ctx, p); err == nil {
+								log.Infof("✅ Connected to peer via topic discovery (%s): %s", discoveryTopicName, p.ID)
+							}
+						}
+					}
+				}
+
+				// Discover peers on submissions topic
+				log.Debugf("Discovering peers on topic: %s", submissionsTopicName)
+				peerChan, err = routingDiscovery.FindPeers(ctx, submissionsTopicName)
+				if err == nil {
+					for p := range peerChan {
+						if p.ID != deps.hostConn.ID() && deps.hostConn.Network().Connectedness(p.ID) != network.Connected {
+							if err := deps.hostConn.Connect(ctx, p); err == nil {
+								log.Infof("✅ Connected to peer via topic discovery (%s): %s", submissionsTopicName, p.ID)
+							}
+						}
+					}
+				}
+			}
+		}
+	}()
+
 	// Start DSV rendezvous point discovery for better peer finding
 	go s.startDSVRendezvousDiscovery()
 
@@ -637,6 +680,11 @@ func (s *server) startDSVRendezvousDiscovery() {
 
 	// Continuously discover peers from the DSV rendezvous point
 	go func() {
+		// Initial discovery after a short delay to let DHT stabilize
+		time.Sleep(10 * time.Second)
+		log.Info("Starting initial DSV peer discovery...")
+		s.discoverDSVPeers(ctx, routingDiscovery, dsvRendezvousPoint)
+
 		ticker := time.NewTicker(30 * time.Second) // Discover peers every 30 seconds
 		defer ticker.Stop()
 
@@ -657,38 +705,48 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 
 	peerChan, err := routingDiscovery.FindPeers(ctx, rendezvousPoint)
 	if err != nil {
-		log.Debugf("Error discovering DSV peers: %v", err)
+		log.Warnf("Error discovering DSV peers on rendezvous point %s: %v", rendezvousPoint, err)
 		return
 	}
 
+	discoveredCount := 0
 	connectedCount := 0
+	alreadyConnectedCount := 0
+
 	for p := range peerChan {
+		discoveredCount++
 		if p.ID == deps.hostConn.ID() {
 			continue // Skip ourselves
 		}
 
 		// Check if already connected
 		if deps.hostConn.Network().Connectedness(p.ID) == network.Connected {
-			continue // Already connected
+			alreadyConnectedCount++
+			log.Debugf("DSV peer %s already connected, skipping", p.ID)
+			continue
 		}
 
 		// Try to connect to the discovered peer
+		log.Debugf("Attempting to connect to discovered DSV peer: %s (addrs: %v)", p.ID, p.Addrs)
 		if err := deps.hostConn.Connect(ctx, p); err != nil {
-			log.Debugf("Failed to connect to DSV peer %s: %v", p.ID, err)
+			log.Warnf("Failed to connect to DSV peer %s: %v", p.ID, err)
 		} else {
 			connectedCount++
 			log.Infof("✅ Connected to DSV peer via rendezvous: %s", p.ID)
 
 			// Limit connections per discovery round
-			if connectedCount >= 3 {
+			if connectedCount >= 10 { // Increased limit for better mesh formation
 				log.Debugf("Reached connection limit for this discovery round")
 				break
 			}
 		}
 	}
 
-	if connectedCount > 0 {
-		log.Infof("DSV rendezvous discovery completed: connected to %d new peers", connectedCount)
+	if discoveredCount == 0 {
+		log.Warnf("⚠️ No DSV peers discovered on rendezvous point %s (DHT may still be bootstrapping)", rendezvousPoint)
+	} else {
+		log.Infof("DSV rendezvous discovery: found %d peers, %d already connected, %d newly connected",
+			discoveredCount, alreadyConnectedCount, connectedCount)
 	}
 }
 
