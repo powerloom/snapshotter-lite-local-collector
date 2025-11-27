@@ -111,7 +111,7 @@ func CreateLibP2pHost() error {
 		return err
 	}
 
-	P2PHost, err = libp2p.New(
+	opts := []libp2p.Option{
 		libp2p.EnableRelay(),
 		libp2p.ConnectionManager(ConnManager),
 		libp2p.ListenAddrs(TcpAddr),
@@ -123,7 +123,25 @@ func CreateLibP2pHost() error {
 		libp2p.EnableRelayService(),
 		libp2p.EnableNATService(),
 		libp2p.EnableHolePunching(),
-		libp2p.Muxer(yamux.ID, yamux.DefaultTransport))
+		libp2p.Muxer(yamux.ID, yamux.DefaultTransport),
+	}
+
+	// Add public IP address if configured (like DSV nodes do)
+	// This ensures we advertise the correct public IP and port in DHT
+	if config.SettingsObj.PublicIP != "" {
+		publicAddr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", config.SettingsObj.PublicIP, config.SettingsObj.LocalCollectorP2PPort))
+		if err != nil {
+			log.Errorf("Failed to create public multiaddr: %v", err)
+		} else {
+			opts = append(opts, libp2p.AddrsFactory(func(addrs []ma.Multiaddr) []ma.Multiaddr {
+				// Add the public address to the list - this is what gets advertised in DHT
+				return append(addrs, publicAddr)
+			}))
+			log.Infof("Advertising public IP %s on port %s in DHT", config.SettingsObj.PublicIP, config.SettingsObj.LocalCollectorP2PPort)
+		}
+	}
+
+	P2PHost, err = libp2p.New(opts...)
 
 	if err != nil {
 		log.Debugln("Error instantiating libp2p host: ", err.Error())
