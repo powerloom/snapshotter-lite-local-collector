@@ -134,7 +134,8 @@ func ConnectToTrustedRelayers(ctx context.Context, host host.Host) []Relayer {
 
 func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 	// Set up a Kademlia DHT for the service host
-	kademliaDHT, err := dht.New(ctx, host)
+	// Use ModeClient for regular peers (not bootstrap nodes)
+	kademliaDHT, err := dht.New(ctx, host, dht.Mode(dht.ModeClient))
 	if err != nil {
 		log.Fatalf("Failed to create DHT: %s", err)
 	}
@@ -145,17 +146,51 @@ func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 	}
 
 	var wg sync.WaitGroup
-	for _, peerAddr := range dht.DefaultBootstrapPeers {
-		peerinfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := host.Connect(ctx, *peerinfo); err != nil {
-				log.Warning(err)
-			} else {
-				log.Debugln("Connection established with bootstrap node:", *peerinfo)
+	// Use custom bootstrap nodes if configured
+	if len(config.SettingsObj.BootstrapNodeAddrs) > 0 {
+		log.Infof("Bootstrapping DHT with %d custom nodes", len(config.SettingsObj.BootstrapNodeAddrs))
+		for i, bootstrapAddr := range config.SettingsObj.BootstrapNodeAddrs {
+			if bootstrapAddr == "" {
+				continue
 			}
-		}()
+
+			peerMA, err := ma.NewMultiaddr(bootstrapAddr)
+			if err != nil {
+				log.Errorf("Invalid custom bootstrap multiaddr %d: %v", i+1, err)
+				continue
+			}
+
+			peerinfo, err := peer.AddrInfoFromP2pAddr(peerMA)
+			if err != nil {
+				log.Errorf("Failed to parse custom bootstrap peer info %d: %v", i+1, err)
+				continue
+			}
+
+			wg.Add(1)
+			go func(index int, addr string, pinfo peer.AddrInfo) {
+				defer wg.Done()
+				if err := host.Connect(ctx, pinfo); err != nil {
+					log.Warningf("Failed to connect to custom bootstrap node %d (%s): %v", index+1, pinfo.ID, err)
+				} else {
+					log.Debugf("Connection established with custom bootstrap node %d: %v", index+1, pinfo)
+				}
+			}(i, bootstrapAddr, *peerinfo)
+		}
+	} else {
+		// Fallback to default bootstrap peers if no custom nodes configured
+		log.Info("No custom bootstrap nodes configured, using default bootstrap peers")
+		for _, peerAddr := range dht.DefaultBootstrapPeers {
+			peerinfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
+			wg.Add(1)
+			go func(pi *peer.AddrInfo) {
+				defer wg.Done()
+				if err := host.Connect(ctx, *pi); err != nil {
+					log.Warning(err)
+				} else {
+					log.Debugln("Connection established with bootstrap node:", *pi)
+				}
+			}(peerinfo)
+		}
 	}
 	wg.Wait()
 
