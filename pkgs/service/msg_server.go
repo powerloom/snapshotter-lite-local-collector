@@ -16,8 +16,10 @@ import (
 	"github.com/google/uuid"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
+	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -712,11 +714,16 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 	discoveredCount := 0
 	connectedCount := 0
 	alreadyConnectedCount := 0
+	skippedCount := 0
 
 	for p := range peerChan {
 		discoveredCount++
+
+		// Skip ourselves
 		if p.ID == deps.hostConn.ID() {
-			continue // Skip ourselves
+			skippedCount++
+			log.Debugf("Skipping self-connection attempt for peer %s", p.ID)
+			continue
 		}
 
 		// Check if already connected
@@ -726,10 +733,36 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 			continue
 		}
 
+		// Filter out internal Docker addresses (172.x.x.x, 127.0.0.1) that aren't reachable
+		// Keep only public IPs or addresses that might be reachable
+		filteredAddrs := []ma.Multiaddr{}
+		for _, addr := range p.Addrs {
+			addrStr := addr.String()
+			// Skip localhost and Docker internal networks
+			if !strings.Contains(addrStr, "/ip4/127.0.0.1/") &&
+				!strings.Contains(addrStr, "/ip4/172.") &&
+				!strings.Contains(addrStr, "/ip4/192.168.") &&
+				!strings.Contains(addrStr, "/ip4/10.") {
+				filteredAddrs = append(filteredAddrs, addr)
+			}
+		}
+
+		if len(filteredAddrs) == 0 {
+			skippedCount++
+			log.Debugf("Skipping peer %s - no reachable addresses (all internal/Docker)", p.ID)
+			continue
+		}
+
+		// Create new peer info with filtered addresses
+		filteredPeer := peer.AddrInfo{
+			ID:    p.ID,
+			Addrs: filteredAddrs,
+		}
+
 		// Try to connect to the discovered peer
-		log.Debugf("Attempting to connect to discovered DSV peer: %s (addrs: %v)", p.ID, p.Addrs)
-		if err := deps.hostConn.Connect(ctx, p); err != nil {
-			log.Warnf("Failed to connect to DSV peer %s: %v", p.ID, err)
+		log.Debugf("Attempting to connect to discovered DSV peer: %s (filtered addrs: %v)", p.ID, filteredAddrs)
+		if err := deps.hostConn.Connect(ctx, filteredPeer); err != nil {
+			log.Debugf("Failed to connect to DSV peer %s: %v", p.ID, err)
 		} else {
 			connectedCount++
 			log.Infof("✅ Connected to DSV peer via rendezvous: %s", p.ID)
@@ -745,8 +778,8 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 	if discoveredCount == 0 {
 		log.Warnf("⚠️ No DSV peers discovered on rendezvous point %s (DHT may still be bootstrapping)", rendezvousPoint)
 	} else {
-		log.Infof("DSV rendezvous discovery: found %d peers, %d already connected, %d newly connected",
-			discoveredCount, alreadyConnectedCount, connectedCount)
+		log.Infof("DSV rendezvous discovery: found %d peers, %d already connected, %d newly connected, %d skipped (self/internal)",
+			discoveredCount, alreadyConnectedCount, connectedCount, skippedCount)
 	}
 }
 
