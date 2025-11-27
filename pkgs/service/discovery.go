@@ -154,15 +154,18 @@ func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 				continue
 			}
 
+			// Try parsing the multiaddr
 			peerMA, err := ma.NewMultiaddr(bootstrapAddr)
 			if err != nil {
-				log.Errorf("Invalid custom bootstrap multiaddr %d: %v", i+1, err)
+				log.Warnf("Invalid custom bootstrap multiaddr %d (%s): %v - skipping", i+1, bootstrapAddr, err)
+				log.Warnf("This may be due to peer ID format incompatibility. Continuing with other bootstrap nodes...")
 				continue
 			}
 
 			peerinfo, err := peer.AddrInfoFromP2pAddr(peerMA)
 			if err != nil {
-				log.Errorf("Failed to parse custom bootstrap peer info %d: %v", i+1, err)
+				log.Warnf("Failed to parse custom bootstrap peer info %d (%s): %v - skipping", i+1, bootstrapAddr, err)
+				log.Warnf("This may be due to peer ID format incompatibility. Continuing with other bootstrap nodes...")
 				continue
 			}
 
