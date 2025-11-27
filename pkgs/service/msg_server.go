@@ -590,8 +590,10 @@ func (s *server) initializeTopics() {
 
 	// Discover peers on topic names (in addition to rendezvous point)
 	go func() {
+		log.Info("Starting topic-based peer discovery (will begin after 15s delay)")
 		time.Sleep(15 * time.Second) // Wait for DHT to stabilize
 		routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
+		log.Info("Topic-based peer discovery started - will run every 30 seconds")
 
 		// Discover peers on both topics periodically
 		ticker := time.NewTicker(30 * time.Second)
@@ -603,28 +605,46 @@ func (s *server) initializeTopics() {
 				return
 			case <-ticker.C:
 				// Discover peers on discovery topic
-				log.Debugf("Discovering peers on topic: %s", discoveryTopicName)
+				log.Infof("🔍 Discovering peers on topic: %s", discoveryTopicName)
 				peerChan, err := routingDiscovery.FindPeers(ctx, discoveryTopicName)
-				if err == nil {
+				if err != nil {
+					log.Warnf("Error discovering peers on topic %s: %v", discoveryTopicName, err)
+				} else {
+					foundCount := 0
+					connectedCount := 0
 					for p := range peerChan {
+						foundCount++
 						if p.ID != deps.hostConn.ID() && deps.hostConn.Network().Connectedness(p.ID) != network.Connected {
 							if err := deps.hostConn.Connect(ctx, p); err == nil {
+								connectedCount++
 								log.Infof("✅ Connected to peer via topic discovery (%s): %s", discoveryTopicName, p.ID)
 							}
 						}
 					}
+					if foundCount > 0 {
+						log.Infof("Topic discovery (%s): found %d peers, %d connected", discoveryTopicName, foundCount, connectedCount)
+					}
 				}
 
 				// Discover peers on submissions topic
-				log.Debugf("Discovering peers on topic: %s", submissionsTopicName)
+				log.Infof("🔍 Discovering peers on topic: %s", submissionsTopicName)
 				peerChan, err = routingDiscovery.FindPeers(ctx, submissionsTopicName)
-				if err == nil {
+				if err != nil {
+					log.Warnf("Error discovering peers on topic %s: %v", submissionsTopicName, err)
+				} else {
+					foundCount := 0
+					connectedCount := 0
 					for p := range peerChan {
+						foundCount++
 						if p.ID != deps.hostConn.ID() && deps.hostConn.Network().Connectedness(p.ID) != network.Connected {
 							if err := deps.hostConn.Connect(ctx, p); err == nil {
+								connectedCount++
 								log.Infof("✅ Connected to peer via topic discovery (%s): %s", submissionsTopicName, p.ID)
 							}
 						}
+					}
+					if foundCount > 0 {
+						log.Infof("Topic discovery (%s): found %d peers, %d connected", submissionsTopicName, foundCount, connectedCount)
 					}
 				}
 			}
