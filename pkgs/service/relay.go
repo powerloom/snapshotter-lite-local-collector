@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	SequencerHostConn    host.Host
+	P2PHost              host.Host
 	SequencerID          peer.ID
 	sequencerMu          sync.RWMutex
 	ConnManager          *connmgr.BasicConnMgr
@@ -39,11 +39,11 @@ func GetSequencerConnection() (host.Host, peer.ID, error) {
 	sequencerMu.RLock()
 	defer sequencerMu.RUnlock()
 
-	if SequencerHostConn == nil || SequencerID.String() == "" {
+	if P2PHost == nil || SequencerID.String() == "" {
 		return nil, "", fmt.Errorf("sequencer connection not established")
 	}
 
-	return SequencerHostConn, SequencerID, nil
+	return P2PHost, SequencerID, nil
 }
 
 func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
@@ -111,7 +111,7 @@ func CreateLibP2pHost() error {
 		return err
 	}
 
-	SequencerHostConn, err = libp2p.New(
+	P2PHost, err = libp2p.New(
 		libp2p.EnableRelay(),
 		libp2p.ConnectionManager(ConnManager),
 		libp2p.ListenAddrs(TcpAddr),
@@ -130,7 +130,7 @@ func CreateLibP2pHost() error {
 		return err
 	}
 
-	SequencerHostConn.Network().Notify(&network.NotifyBundle{
+	P2PHost.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
 			log.Infof("P2P peer connected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
 		},
@@ -149,13 +149,13 @@ func EstablishSequencerConnection() error {
 	defer sequencerMu.Unlock()
 
 	// Clear existing connection if any
-	if SequencerHostConn != nil {
-		if err := SequencerHostConn.Close(); err != nil {
+	if P2PHost != nil {
+		if err := P2PHost.Close(); err != nil {
 			log.Warnf("Error closing existing connection: %v", err)
 		}
 		// Important: Signal that connection is being reset
 		// This should trigger cleanup of existing stream pool
-		SequencerHostConn = nil
+		P2PHost = nil
 		SequencerID = ""
 	}
 
@@ -164,7 +164,7 @@ func EstablishSequencerConnection() error {
 		return fmt.Errorf("failed to create libp2p host: %w", err)
 	}
 
-	// No need to reassign SequencerHostConn as it's already set in CreateLibP2pHost()
+	// No need to reassign P2PHost as it's already set in CreateLibP2pHost()
 
 	// 2. Get sequencer info
 	sequencer, err := fetchSequencer(
@@ -196,7 +196,7 @@ func EstablishSequencerConnection() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := SequencerHostConn.Connect(ctx, *sequencerInfo); err != nil {
+	if err := P2PHost.Connect(ctx, *sequencerInfo); err != nil {
 		return fmt.Errorf("failed to connect to sequencer: %w", err)
 	}
 
@@ -290,51 +290,4 @@ func StartConnectionRefreshLoop(ctx context.Context) {
 			log.Info("✅ Connection refresh cycle completed successfully")
 		}
 	}
-}
-
-// connectToBootstrapNodes connects to multiple bootstrap nodes concurrently
-func connectToBootstrapNodes(bootstrapAddrs []string, host host.Host) {
-	if len(bootstrapAddrs) == 0 {
-		log.Debug("No bootstrap nodes configured")
-		return
-	}
-
-	log.Infof("Attempting to connect to %d bootstrap nodes", len(bootstrapAddrs))
-
-	var wg sync.WaitGroup
-	for i, addr := range bootstrapAddrs {
-		if addr == "" {
-			continue
-		}
-
-		wg.Add(1)
-		go func(index int, bootstrapAddr string) {
-			defer wg.Done()
-
-			log.Infof("Connecting to bootstrap node %d: %s", index+1, bootstrapAddr)
-			bootstrapMA, err := ma.NewMultiaddr(bootstrapAddr)
-			if err != nil {
-				log.Errorf("Invalid bootstrap multiaddr %d: %v", index+1, err)
-				return
-			}
-
-			bootstrapInfo, err := peer.AddrInfoFromP2pAddr(bootstrapMA)
-			if err != nil {
-				log.Errorf("Failed to parse bootstrap peer info %d: %v", index+1, err)
-				return
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			if err := host.Connect(ctx, *bootstrapInfo); err != nil {
-				log.Errorf("Failed to connect to bootstrap node %d (%s): %v", index+1, bootstrapAddr, err)
-			} else {
-				log.Infof("Successfully connected to bootstrap node %d: %s", index+1, bootstrapAddr)
-			}
-		}(i, addr)
-	}
-
-	wg.Wait()
-	log.Info("Bootstrap node connection attempts completed")
 }

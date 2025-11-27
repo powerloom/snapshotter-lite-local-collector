@@ -43,14 +43,14 @@ type reqSlot struct {
 
 // createStream is now a method of StreamPool
 func (p *StreamPool) createStream() (network.Stream, error) {
-	if SequencerHostConn == nil {
+	if P2PHost == nil {
 		return nil, fmt.Errorf("no sequencer connection available")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), config.SettingsObj.StreamWriteTimeout)
 	defer cancel()
 
-	stream, err := SequencerHostConn.NewStream(ctx, p.sequencerID, "/collect")
+	stream, err := P2PHost.NewStream(ctx, p.sequencerID, "/collect")
 	if err != nil {
 		return nil, fmt.Errorf("new stream creation failed: %w", err)
 	}

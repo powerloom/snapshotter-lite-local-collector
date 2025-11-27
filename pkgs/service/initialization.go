@@ -53,15 +53,15 @@ func InitializeService() error {
 	}
 
 	// Verify connection state
-	if SequencerHostConn == nil {
-		return fmt.Errorf("sequencer host connection not initialized")
+	if P2PHost == nil {
+		return fmt.Errorf("P2P host not initialized")
 	}
 
 	if SequencerID.String() == "" {
 		return fmt.Errorf("sequencer ID not initialized")
 	}
 
-	deps.hostConn = SequencerHostConn
+	deps.hostConn = P2PHost
 	deps.sequencerID = SequencerID
 
 	// Give DHT some time to bootstrap and discover peers
