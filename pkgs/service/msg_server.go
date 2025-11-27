@@ -384,9 +384,19 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 	peersInTopic := s.pubsub.ListPeers(topicString)
 	if len(peersInTopic) == 0 {
 		// Try quick discovery if no peers
+		log.Debugf("No peers in topic %s, attempting quick discovery...", topicString)
 		s.quickDiscoverPeers()
 		// Re-check after discovery
 		peersInTopic = s.pubsub.ListPeers(topicString)
+		if len(peersInTopic) == 0 {
+			// Log diagnostic info when still no peers
+			totalPeers := len(s.pubsub.ListPeers(""))
+			log.WithFields(log.Fields{
+				"topic":       topicString,
+				"total_peers": totalPeers,
+				"host_id":     deps.hostConn.ID().String(),
+			}).Warn("⚠️ Publishing to gossipsub with 0 peers in topic mesh - mesh may still be forming")
+		}
 	}
 
 	// Create P2P message
