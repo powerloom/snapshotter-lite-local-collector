@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
 	log "github.com/sirupsen/logrus"
@@ -28,6 +27,32 @@ type epochMetrics struct {
 	received  atomic.Uint64
 	succeeded atomic.Uint64
 }
+
+// MeshState represents the health state of the gossipsub mesh
+type MeshState string
+
+const (
+	MeshStateHealthy  MeshState = "healthy"
+	MeshStateDegraded MeshState = "degraded"
+	MeshStatePruned   MeshState = "pruned"
+)
+
+// MeshHealthMetrics tracks mesh health over time
+type MeshHealthMetrics struct {
+	State                    MeshState
+	DiscoveryPeerCount       int
+	SubmissionsPeerCount     int
+	TotalConnectedPeers      int
+	LastStateChange          time.Time
+	ConsecutiveLowPeerCounts int
+	TotalPruningEvents       int
+	LastPruningTime          time.Time
+	Uptime                   time.Duration
+	StartTime                time.Time
+}
+
+// MeshLifecycleHook is a function type for mesh lifecycle event callbacks
+type MeshLifecycleHook func(event string, metrics MeshHealthMetrics)
 
 // server is used to implement submission.SubmissionService.
 type server struct {
@@ -42,6 +67,11 @@ type server struct {
 	// Two-level topic architecture
 	discoveryTopic   *pubsub.Topic // For peer discovery (epoch 0)
 	submissionsTopic *pubsub.Topic // Single topic for all submissions
+
+	// Mesh health monitoring
+	meshMetrics        MeshHealthMetrics
+	meshMetricsMu      sync.RWMutex
+	meshLifecycleHooks []MeshLifecycleHook
 }
 
 var _ pkgs.SubmissionServer = &server{}
@@ -61,6 +91,11 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 		metrics:        &sync.Map{},
 		pubsub:         gossiper,
 		joinedTopics:   make(map[string]*pubsub.Topic),
+		meshMetrics: MeshHealthMetrics{
+			State:     MeshStateHealthy,
+			StartTime: time.Now(),
+		},
+		meshLifecycleHooks: make([]MeshLifecycleHook, 0),
 	}
 
 	// Initialize the two-level topic architecture
@@ -68,6 +103,20 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 
 	// Start periodic metrics logging with 15 second interval
 	go server.logMetricsPeriodically(15 * time.Second)
+
+	// Register default mesh lifecycle hook for logging
+	server.RegisterMeshLifecycleHook(func(event string, metrics MeshHealthMetrics) {
+		log.WithFields(log.Fields{
+			"event":                event,
+			"state":                metrics.State,
+			"discovery_peers":      metrics.DiscoveryPeerCount,
+			"submission_peers":     metrics.SubmissionsPeerCount,
+			"total_connected":      metrics.TotalConnectedPeers,
+			"consecutive_low":      metrics.ConsecutiveLowPeerCounts,
+			"total_pruning_events": metrics.TotalPruningEvents,
+			"uptime_seconds":       int(metrics.Uptime.Seconds()),
+		}).Info("🔔 Mesh lifecycle event")
+	})
 
 	return server
 }
@@ -391,12 +440,21 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 		peersInTopic = s.pubsub.ListPeers(topicString)
 		if len(peersInTopic) == 0 {
 			// Log diagnostic info when still no peers
-			totalPeers := len(s.pubsub.ListPeers(""))
+			totalPeers := len(deps.hostConn.Network().Peers())
+			metrics := s.GetMeshHealthMetrics()
+
 			log.WithFields(log.Fields{
-				"topic":       topicString,
-				"total_peers": totalPeers,
-				"host_id":     deps.hostConn.ID().String(),
-			}).Warn("⚠️ Publishing to gossipsub with 0 peers in topic mesh - mesh may still be forming")
+				"topic":                topicString,
+				"total_connected":      totalPeers,
+				"mesh_state":           metrics.State,
+				"consecutive_low":      metrics.ConsecutiveLowPeerCounts,
+				"total_pruning_events": metrics.TotalPruningEvents,
+				"uptime_seconds":       int(metrics.Uptime.Seconds()),
+				"host_id":              deps.hostConn.ID().String(),
+			}).Error("🚨 CRITICAL: Publishing to gossipsub with 0 peers in topic mesh - messages will not propagate!")
+
+			// Trigger lifecycle hook for zero-peer publish attempt
+			s.triggerMeshLifecycleHook("zero_peer_publish_attempt", metrics)
 		}
 	}
 
@@ -428,14 +486,29 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 		return
 	}
 
+	// Get current mesh metrics for logging
+	metrics := s.GetMeshHealthMetrics()
+
 	log.WithFields(log.Fields{
-		"epoch_id":     submission.Request.EpochId,
-		"project_id":   submission.Request.ProjectId,
-		"topic":        topicString,
-		"snapshot_cid": submission.Request.SnapshotCid,
-		"peer_count":   len(peersInTopic),
-		"msg_size":     len(msgBytes),
+		"epoch_id":        submission.Request.EpochId,
+		"project_id":      submission.Request.ProjectId,
+		"topic":           topicString,
+		"snapshot_cid":    submission.Request.SnapshotCid,
+		"peer_count":      len(peersInTopic),
+		"msg_size":        len(msgBytes),
+		"mesh_state":      metrics.State,
+		"total_connected": metrics.TotalConnectedPeers,
+		"uptime_seconds":  int(metrics.Uptime.Seconds()),
 	}).Info("✅ Successfully published submission to gossipsub")
+
+	// Alert if peer count is low but not zero (degraded state)
+	if len(peersInTopic) > 0 && len(peersInTopic) < 2 {
+		log.WithFields(log.Fields{
+			"peer_count": len(peersInTopic),
+			"topic":      topicString,
+			"mesh_state": metrics.State,
+		}).Warn("⚠️ Publishing with low peer count - mesh may be degrading")
+	}
 }
 
 // quickDiscoverPeers attempts a fast peer discovery
@@ -763,7 +836,12 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 			connectedCount++
 			log.Infof("✅ Connected to DSV peer via rendezvous: %s", p.ID)
 
-			// Limit connections per discovery round
+			// Protect DSV peers from being pruned by connection manager
+			if ConnManager != nil {
+				ConnManager.TagPeer(p.ID, "dsv-peer", 100) // High priority tag
+			}
+
+			// Limit connections per discovery round (matching lite node)
 			if connectedCount >= 10 {
 				log.Debugf("Reached connection limit for this discovery round")
 				break
@@ -773,7 +851,8 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 
 	if discoveredCount == 0 {
 		log.Debugf("No DSV peers discovered on rendezvous point %s (DHT may still be bootstrapping)", rendezvousPoint)
-	} else if connectedCount > 0 {
+	} else {
+		// Always log discovery results, even if no new connections
 		log.Infof("DSV rendezvous discovery: found %d peers, %d already connected, %d newly connected, %d skipped (self)",
 			discoveredCount, alreadyConnectedCount, connectedCount, skippedCount)
 	}
@@ -831,34 +910,144 @@ func (s *server) publishHeartbeats() {
 	}
 }
 
+// updateMeshMetrics updates mesh health metrics and triggers lifecycle hooks
+func (s *server) updateMeshMetrics(discoveryPeers, submissionPeers, totalConnectedPeers int) {
+	s.meshMetricsMu.Lock()
+	defer s.meshMetricsMu.Unlock()
+
+	oldState := s.meshMetrics.State
+	oldDiscoveryPeers := s.meshMetrics.DiscoveryPeerCount
+	oldSubmissionPeers := s.meshMetrics.SubmissionsPeerCount
+
+	// Update metrics
+	s.meshMetrics.DiscoveryPeerCount = discoveryPeers
+	s.meshMetrics.SubmissionsPeerCount = submissionPeers
+	s.meshMetrics.TotalConnectedPeers = totalConnectedPeers
+	s.meshMetrics.Uptime = time.Since(s.meshMetrics.StartTime)
+
+	// Determine new state
+	var newState MeshState
+	if discoveryPeers == 0 && submissionPeers == 0 {
+		newState = MeshStatePruned
+		s.meshMetrics.ConsecutiveLowPeerCounts++
+		if oldState != MeshStatePruned {
+			s.meshMetrics.TotalPruningEvents++
+			s.meshMetrics.LastPruningTime = time.Now()
+		}
+	} else if discoveryPeers < 2 || submissionPeers < 2 {
+		newState = MeshStateDegraded
+		if oldState == MeshStatePruned {
+			s.meshMetrics.ConsecutiveLowPeerCounts = 0 // Reset on recovery
+		}
+	} else {
+		newState = MeshStateHealthy
+		if oldState != MeshStateHealthy {
+			s.meshMetrics.ConsecutiveLowPeerCounts = 0 // Reset on recovery
+		}
+	}
+
+	// Detect state transitions and trigger hooks
+	if newState != oldState {
+		s.meshMetrics.State = newState
+		s.meshMetrics.LastStateChange = time.Now()
+
+		event := fmt.Sprintf("mesh_state_transition:%s->%s", oldState, newState)
+		s.triggerMeshLifecycleHook(event, s.meshMetrics)
+
+		log.WithFields(log.Fields{
+			"old_state":            oldState,
+			"new_state":            newState,
+			"discovery_peers":      discoveryPeers,
+			"submission_peers":     submissionPeers,
+			"total_connected":      totalConnectedPeers,
+			"consecutive_low":      s.meshMetrics.ConsecutiveLowPeerCounts,
+			"total_pruning_events": s.meshMetrics.TotalPruningEvents,
+			"uptime_seconds":       int(s.meshMetrics.Uptime.Seconds()),
+		}).Errorf("🚨 MESH STATE TRANSITION: %s -> %s", oldState, newState)
+	} else if discoveryPeers != oldDiscoveryPeers || submissionPeers != oldSubmissionPeers {
+		// Peer count changed but state didn't
+		event := fmt.Sprintf("mesh_peer_count_change:discovery=%d->%d,submissions=%d->%d",
+			oldDiscoveryPeers, discoveryPeers, oldSubmissionPeers, submissionPeers)
+		s.triggerMeshLifecycleHook(event, s.meshMetrics)
+
+		log.WithFields(log.Fields{
+			"state":            newState,
+			"discovery_peers":  fmt.Sprintf("%d->%d", oldDiscoveryPeers, discoveryPeers),
+			"submission_peers": fmt.Sprintf("%d->%d", oldSubmissionPeers, submissionPeers),
+			"total_connected":  totalConnectedPeers,
+		}).Info("📊 Mesh peer count changed")
+	}
+
+	s.meshMetrics.State = newState
+}
+
+// triggerMeshLifecycleHook calls all registered lifecycle hooks
+func (s *server) triggerMeshLifecycleHook(event string, metrics MeshHealthMetrics) {
+	for _, hook := range s.meshLifecycleHooks {
+		go func(h MeshLifecycleHook) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Errorf("Panic in mesh lifecycle hook: %v", r)
+				}
+			}()
+			h(event, metrics)
+		}(hook)
+	}
+}
+
+// RegisterMeshLifecycleHook registers a callback function for mesh lifecycle events
+func (s *server) RegisterMeshLifecycleHook(hook MeshLifecycleHook) {
+	s.meshMetricsMu.Lock()
+	defer s.meshMetricsMu.Unlock()
+	s.meshLifecycleHooks = append(s.meshLifecycleHooks, hook)
+}
+
+// GetMeshHealthMetrics returns current mesh health metrics (thread-safe)
+func (s *server) GetMeshHealthMetrics() MeshHealthMetrics {
+	s.meshMetricsMu.RLock()
+	defer s.meshMetricsMu.RUnlock()
+	return s.meshMetrics
+}
+
 // monitorMeshStatus periodically checks mesh membership and recovers from pruning
 func (s *server) monitorMeshStatus() {
 	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds for faster recovery
 	defer ticker.Stop()
 
 	lastRecoveryAttempt := time.Now()
-	consecutiveLowPeerCounts := 0
+	lastDetailedLog := time.Now()
 
 	for range ticker.C {
 		// Check peer counts for both topics
 		discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
 		discoveryPeers := len(s.pubsub.ListPeers(discoveryTopic))
 		submissionPeers := len(s.pubsub.ListPeers(submissionsTopic))
+		totalConnectedPeers := len(deps.hostConn.Network().Peers())
+
+		// Update metrics and detect state transitions
+		s.updateMeshMetrics(discoveryPeers, submissionPeers, totalConnectedPeers)
+
+		metrics := s.GetMeshHealthMetrics()
 
 		// CRITICAL: Detect and recover from pruning
 		if discoveryPeers == 0 || submissionPeers == 0 {
-			consecutiveLowPeerCounts++
-
 			log.WithFields(log.Fields{
-				"discovery_peers":  discoveryPeers,
-				"submission_peers": submissionPeers,
-				"consecutive_low":  consecutiveLowPeerCounts,
-			}).Warn("⚠️ LOW/ZERO peer count detected - possible pruning")
+				"discovery_peers":      discoveryPeers,
+				"submission_peers":     submissionPeers,
+				"total_connected":      totalConnectedPeers,
+				"consecutive_low":      metrics.ConsecutiveLowPeerCounts,
+				"total_pruning_events": metrics.TotalPruningEvents,
+				"last_pruning_time":    metrics.LastPruningTime,
+				"uptime_seconds":       int(metrics.Uptime.Seconds()),
+				"state":                metrics.State,
+			}).Error("🚨 CRITICAL: Mesh pruned - no peers in gossipsub mesh!")
 
 			// Attempt recovery if it's been at least 30 seconds since last attempt
 			if time.Since(lastRecoveryAttempt) > 30*time.Second {
 				log.Warn("🔄 Attempting mesh recovery...")
 				lastRecoveryAttempt = time.Now()
+
+				s.triggerMeshLifecycleHook("mesh_recovery_attempt", metrics)
 
 				// Quick peer discovery
 				s.quickDiscoverPeers()
@@ -898,30 +1087,29 @@ func (s *server) monitorMeshStatus() {
 			}
 		} else {
 			// Reset counter if we have peers
-			if consecutiveLowPeerCounts > 0 {
+			if metrics.ConsecutiveLowPeerCounts > 0 {
 				log.WithFields(log.Fields{
 					"discovery_peers":  discoveryPeers,
 					"submission_peers": submissionPeers,
+					"total_connected":  totalConnectedPeers,
+					"uptime_seconds":   int(metrics.Uptime.Seconds()),
 				}).Info("✅ Mesh recovered - peer connections restored")
+				s.triggerMeshLifecycleHook("mesh_recovered", metrics)
 			}
-			consecutiveLowPeerCounts = 0
 
-			// Regular status log every 2 minutes
-			log.WithFields(log.Fields{
-				"discovery_peers":  discoveryPeers,
-				"submission_peers": submissionPeers,
-				"host_id":          deps.hostConn.ID().String(),
-			}).Debug("Mesh status check - healthy")
+			// Detailed status log every 5 minutes
+			if time.Since(lastDetailedLog) > 5*time.Minute {
+				log.WithFields(log.Fields{
+					"state":                metrics.State,
+					"discovery_peers":      discoveryPeers,
+					"submission_peers":     submissionPeers,
+					"total_connected":      totalConnectedPeers,
+					"total_pruning_events": metrics.TotalPruningEvents,
+					"uptime_seconds":       int(metrics.Uptime.Seconds()),
+					"host_id":              deps.hostConn.ID().String(),
+				}).Info("📊 Mesh health status")
+				lastDetailedLog = time.Now()
+			}
 		}
 	}
-}
-
-// containsPeerID checks if a peer ID is in a list of peer IDs
-func containsPeerID(peerList []peer.ID, targetID peer.ID) bool {
-	for _, pid := range peerList {
-		if pid == targetID {
-			return true
-		}
-	}
-	return false
 }
