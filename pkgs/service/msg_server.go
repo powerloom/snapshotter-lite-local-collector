@@ -19,7 +19,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
-	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -618,11 +617,17 @@ func (s *server) initializeTopics() {
 							if err := deps.hostConn.Connect(ctx, p); err == nil {
 								connectedCount++
 								log.Infof("✅ Connected to peer via topic discovery (%s): %s", discoveryTopicName, p.ID)
+								// Protect topic-discovered peers from being pruned
+								if ConnManager != nil {
+									ConnManager.TagPeer(p.ID, "topic-peer", 50) // Medium priority
+								}
 							}
 						}
 					}
 					if foundCount > 0 {
-						log.Infof("Topic discovery (%s): found %d peers, %d connected", discoveryTopicName, foundCount, connectedCount)
+						meshPeers := len(s.pubsub.ListPeers(discoveryTopicName))
+						log.Infof("Topic discovery (%s): found %d peers, %d connected, %d in mesh",
+							discoveryTopicName, foundCount, connectedCount, meshPeers)
 					}
 				}
 
@@ -640,11 +645,17 @@ func (s *server) initializeTopics() {
 							if err := deps.hostConn.Connect(ctx, p); err == nil {
 								connectedCount++
 								log.Infof("✅ Connected to peer via topic discovery (%s): %s", submissionsTopicName, p.ID)
+								// Protect topic-discovered peers from being pruned
+								if ConnManager != nil {
+									ConnManager.TagPeer(p.ID, "topic-peer", 50) // Medium priority
+								}
 							}
 						}
 					}
 					if foundCount > 0 {
-						log.Infof("Topic discovery (%s): found %d peers, %d connected", submissionsTopicName, foundCount, connectedCount)
+						meshPeers := len(s.pubsub.ListPeers(submissionsTopicName))
+						log.Infof("Topic discovery (%s): found %d peers, %d connected, %d in mesh",
+							submissionsTopicName, foundCount, connectedCount, meshPeers)
 					}
 				}
 			}
@@ -702,11 +713,6 @@ func (s *server) startDSVRendezvousDiscovery() {
 
 	// Continuously discover peers from the DSV rendezvous point
 	go func() {
-		// Initial discovery after a short delay to let DHT stabilize
-		time.Sleep(10 * time.Second)
-		log.Info("Starting initial DSV peer discovery...")
-		s.discoverDSVPeers(ctx, routingDiscovery, dsvRendezvousPoint)
-
 		ticker := time.NewTicker(30 * time.Second) // Discover peers every 30 seconds
 		defer ticker.Stop()
 
@@ -739,56 +745,26 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 	for p := range peerChan {
 		discoveredCount++
 
-		// Skip ourselves
 		if p.ID == deps.hostConn.ID() {
 			skippedCount++
-			log.Debugf("Skipping self-connection attempt for peer %s", p.ID)
-			continue
+			continue // Skip ourselves
 		}
 
 		// Check if already connected
 		if deps.hostConn.Network().Connectedness(p.ID) == network.Connected {
 			alreadyConnectedCount++
-			log.Debugf("DSV peer %s already connected, skipping", p.ID)
-			continue
+			continue // Already connected
 		}
 
-		// Filter out internal Docker addresses (172.x.x.x, 127.0.0.1) that aren't reachable
-		// Keep only public IPs or addresses that might be reachable
-		filteredAddrs := []ma.Multiaddr{}
-		for _, addr := range p.Addrs {
-			addrStr := addr.String()
-			// Skip localhost and Docker internal networks
-			if !strings.Contains(addrStr, "/ip4/127.0.0.1/") &&
-				!strings.Contains(addrStr, "/ip4/172.") &&
-				!strings.Contains(addrStr, "/ip4/192.168.") &&
-				!strings.Contains(addrStr, "/ip4/10.") {
-				filteredAddrs = append(filteredAddrs, addr)
-			}
-		}
-
-		if len(filteredAddrs) == 0 {
-			skippedCount++
-			log.Debugf("Skipping peer %s - no reachable addresses (all internal/Docker)", p.ID)
-			continue
-		}
-
-		// Create new peer info with filtered addresses
-		filteredPeer := peer.AddrInfo{
-			ID:    p.ID,
-			Addrs: filteredAddrs,
-		}
-
-		// Try to connect to the discovered peer
-		log.Debugf("Attempting to connect to discovered DSV peer: %s (filtered addrs: %v)", p.ID, filteredAddrs)
-		if err := deps.hostConn.Connect(ctx, filteredPeer); err != nil {
+		// Try to connect to the discovered peer (no address filtering - let libp2p handle it)
+		if err := deps.hostConn.Connect(ctx, p); err != nil {
 			log.Debugf("Failed to connect to DSV peer %s: %v", p.ID, err)
 		} else {
 			connectedCount++
 			log.Infof("✅ Connected to DSV peer via rendezvous: %s", p.ID)
 
 			// Limit connections per discovery round
-			if connectedCount >= 10 { // Increased limit for better mesh formation
+			if connectedCount >= 10 {
 				log.Debugf("Reached connection limit for this discovery round")
 				break
 			}
@@ -796,9 +772,9 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 	}
 
 	if discoveredCount == 0 {
-		log.Warnf("⚠️ No DSV peers discovered on rendezvous point %s (DHT may still be bootstrapping)", rendezvousPoint)
-	} else {
-		log.Infof("DSV rendezvous discovery: found %d peers, %d already connected, %d newly connected, %d skipped (self/internal)",
+		log.Debugf("No DSV peers discovered on rendezvous point %s (DHT may still be bootstrapping)", rendezvousPoint)
+	} else if connectedCount > 0 {
+		log.Infof("DSV rendezvous discovery: found %d peers, %d already connected, %d newly connected, %d skipped (self)",
 			discoveredCount, alreadyConnectedCount, connectedCount, skippedCount)
 	}
 }
@@ -938,4 +914,14 @@ func (s *server) monitorMeshStatus() {
 			}).Debug("Mesh status check - healthy")
 		}
 	}
+}
+
+// containsPeerID checks if a peer ID is in a list of peer IDs
+func containsPeerID(peerList []peer.ID, targetID peer.ID) bool {
+	for _, pid := range peerList {
+		if pid == targetID {
+			return true
+		}
+	}
+	return false
 }

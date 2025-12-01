@@ -176,6 +176,11 @@ func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 					log.Warningf("Failed to connect to custom bootstrap node %d (%s): %v", index+1, pinfo.ID, err)
 				} else {
 					log.Debugf("Connection established with custom bootstrap node %d: %v", index+1, pinfo)
+					// Protect bootstrap nodes from being pruned
+					if connMgr := host.ConnManager(); connMgr != nil {
+						connMgr.TagPeer(pinfo.ID, "bootstrap", 200) // Very high priority
+						log.Debugf("Tagged bootstrap node %d for protection from pruning", index+1)
+					}
 				}
 			}(i, bootstrapAddr, *peerinfo)
 		}
