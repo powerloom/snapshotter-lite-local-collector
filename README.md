@@ -34,6 +34,53 @@ The Local Collector acts as an intermediary service that:
 - **DHT-based Peer Discovery**: Automatic peer discovery for gossipsub mesh
 - **Connection Management**: Configurable connection pool limits
 
+## Peer Discovery Architecture
+
+The local collector uses a **multi-mechanism discovery approach** to ensure reliable peer discovery and mesh formation. All mechanisms use DHT (Distributed Hash Table) for peer finding, but search for different rendezvous strings/topic names to provide redundancy.
+
+### Three Discovery Mechanisms
+
+1. **Topic-based Discovery (Discovery Topic)**
+   - Searches DHT for peers advertising on: `/powerloom/{prefix}/snapshot-submissions/0`
+   - Purpose: Find peers via the discovery topic
+   - Frequency: Every 30 seconds
+   - Implementation: Inline connection logic in `initializeTopics()`
+
+2. **Topic-based Discovery (Submissions Topic)**
+   - Searches DHT for peers advertising on: `/powerloom/{prefix}/snapshot-submissions/all`
+   - Purpose: Find peers via the submissions topic
+   - Frequency: Every 30 seconds
+   - Implementation: Inline connection logic in `initializeTopics()`
+
+3. **Rendezvous Point Discovery**
+   - Searches DHT for peers advertising on: `{RENDEZVOUS_POINT}` (e.g., `powerloom-dsv-devnet-alpha`)
+   - Purpose: Find DSV nodes via a dedicated rendezvous string
+   - Frequency: Every 30 seconds
+   - Implementation: `discoverDSVPeers()` function called from `startDSVRendezvousDiscovery()`
+
+### Two-Level Topic Architecture
+
+The gossipsub mesh uses a two-level topic structure:
+
+- **Discovery Topic** (`/0`): Used for peer discovery and network joining
+  - Lightweight presence messages
+  - Helps establish initial mesh connections
+  - Prevents race conditions during network formation
+
+- **Submissions Topic** (`/all`): Used for actual snapshot data transmission
+  - Full submission payloads
+  - Primary data channel for DSV network
+  - All snapshot submissions are published here
+
+### Why Multiple Discovery Mechanisms?
+
+The redundancy ensures:
+- **Reliability**: If one mechanism fails, others continue working
+- **Faster Mesh Formation**: Multiple paths increase chances of finding peers quickly
+- **Network Resilience**: Different discovery paths help maintain connectivity during network churn
+
+All three mechanisms run concurrently and independently, connecting to discovered peers up to a limit of 3 connections per discovery round.
+
 ## Development
 
 ### Prerequisites
