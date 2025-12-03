@@ -159,7 +159,7 @@ func CreateLibP2pHost() error {
 				// Add the public address to the list - this is what gets advertised in DHT
 				return append(addrs, publicAddr)
 			}))
-			log.Infof("Advertising public IP %s on port %s in DHT", config.SettingsObj.PublicIP, config.SettingsObj.LocalCollectorP2PPort)
+			log.Debugf("Advertising public IP %s on port %s in DHT", config.SettingsObj.PublicIP, config.SettingsObj.LocalCollectorP2PPort)
 		}
 	}
 
@@ -172,10 +172,10 @@ func CreateLibP2pHost() error {
 
 	P2PHost.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
-			log.Infof("P2P peer connected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
+			log.Debugf("P2P peer connected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
 		},
 		DisconnectedF: func(_ network.Network, conn network.Conn) {
-			log.Infof("P2P peer disconnected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
+			log.Debugf("P2P peer disconnected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
 		},
 	})
 

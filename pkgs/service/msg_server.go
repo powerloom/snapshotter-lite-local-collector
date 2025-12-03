@@ -631,7 +631,7 @@ func (s *server) initializeTopics() {
 	// Advertise on discovery topic for peer finding
 	go func() {
 		routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
-		log.Infof("Advertising on discovery topic: %s", discoveryTopicName)
+		log.Debugf("Advertising on discovery topic: %s", discoveryTopicName)
 
 		// Continuous advertising with retries
 		for {
@@ -686,7 +686,7 @@ func (s *server) initializeTopics() {
 	// Also advertise on the submissions topic
 	go func() {
 		routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
-		log.Infof("Advertising on submissions topic: %s", submissionsTopicName)
+		log.Debugf("Advertising on submissions topic: %s", submissionsTopicName)
 
 		// Continuous advertising with retries
 		for {
@@ -697,9 +697,9 @@ func (s *server) initializeTopics() {
 
 	// Discover peers on topic names (in addition to rendezvous point)
 	go func() {
-		log.Info("Starting topic-based peer discovery")
+		log.Debug("Starting topic-based peer discovery")
 		routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
-		log.Info("Topic-based peer discovery started - will run every 30 seconds")
+		log.Debug("Topic-based peer discovery started - will run every 30 seconds")
 
 		// Discover peers on both topics periodically
 		ticker := time.NewTicker(30 * time.Second)
@@ -711,7 +711,7 @@ func (s *server) initializeTopics() {
 				return
 			case <-ticker.C:
 				// Discover peers on discovery topic
-				log.Infof("🔍 Discovering peers on topic: %s", discoveryTopicName)
+				log.Debugf("🔍 Discovering peers on topic: %s", discoveryTopicName)
 				peerChan, err := routingDiscovery.FindPeers(ctx, discoveryTopicName)
 				if err != nil {
 					log.Warnf("Error discovering peers on topic %s: %v", discoveryTopicName, err)
@@ -723,7 +723,7 @@ func (s *server) initializeTopics() {
 						if p.ID != deps.hostConn.ID() && deps.hostConn.Network().Connectedness(p.ID) != network.Connected {
 							if err := deps.hostConn.Connect(ctx, p); err == nil {
 								connectedCount++
-								log.Infof("✅ Connected to peer via topic discovery (%s): %s", discoveryTopicName, p.ID)
+								log.Debugf("✅ Connected to peer via topic discovery (%s): %s", discoveryTopicName, p.ID)
 								// Protect topic-discovered peers from being pruned
 								if ConnManager != nil {
 									ConnManager.TagPeer(p.ID, "topic-peer", 50) // Medium priority
@@ -733,13 +733,13 @@ func (s *server) initializeTopics() {
 					}
 					if foundCount > 0 {
 						meshPeers := len(s.pubsub.ListPeers(discoveryTopicName))
-						log.Infof("Topic discovery (%s): found %d peers, %d connected, %d in mesh",
+						log.Debugf("Topic discovery (%s): found %d peers, %d connected, %d in mesh",
 							discoveryTopicName, foundCount, connectedCount, meshPeers)
 					}
 				}
 
 				// Discover peers on submissions topic
-				log.Infof("🔍 Discovering peers on topic: %s", submissionsTopicName)
+				log.Debugf("🔍 Discovering peers on topic: %s", submissionsTopicName)
 				peerChan, err = routingDiscovery.FindPeers(ctx, submissionsTopicName)
 				if err != nil {
 					log.Warnf("Error discovering peers on topic %s: %v", submissionsTopicName, err)
@@ -751,7 +751,7 @@ func (s *server) initializeTopics() {
 						if p.ID != deps.hostConn.ID() && deps.hostConn.Network().Connectedness(p.ID) != network.Connected {
 							if err := deps.hostConn.Connect(ctx, p); err == nil {
 								connectedCount++
-								log.Infof("✅ Connected to peer via topic discovery (%s): %s", submissionsTopicName, p.ID)
+								log.Debugf("✅ Connected to peer via topic discovery (%s): %s", submissionsTopicName, p.ID)
 								// Protect topic-discovered peers from being pruned
 								if ConnManager != nil {
 									ConnManager.TagPeer(p.ID, "topic-peer", 50) // Medium priority
@@ -761,7 +761,7 @@ func (s *server) initializeTopics() {
 					}
 					if foundCount > 0 {
 						meshPeers := len(s.pubsub.ListPeers(submissionsTopicName))
-						log.Infof("Topic discovery (%s): found %d peers, %d connected, %d in mesh",
+						log.Debugf("Topic discovery (%s): found %d peers, %d connected, %d in mesh",
 							submissionsTopicName, foundCount, connectedCount, meshPeers)
 					}
 				}
@@ -792,13 +792,13 @@ func (s *server) startDSVRendezvousDiscovery() {
 		return
 	}
 
-	log.Infof("Starting DSV rendezvous point discovery on: %s", dsvRendezvousPoint)
+	log.Debugf("Starting DSV rendezvous point discovery on: %s", dsvRendezvousPoint)
 
 	routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
 
 	// Advertise our presence on the DSV rendezvous point
 	go func() {
-		log.Infof("Advertising on DSV rendezvous point: %s", dsvRendezvousPoint)
+		log.Debugf("Advertising on DSV rendezvous point: %s", dsvRendezvousPoint)
 
 		// Initial advertising
 		util.Advertise(ctx, routingDiscovery, dsvRendezvousPoint)
@@ -868,7 +868,7 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 			log.Debugf("Failed to connect to DSV peer %s: %v", p.ID, err)
 		} else {
 			connectedCount++
-			log.Infof("✅ Connected to DSV peer via rendezvous: %s", p.ID)
+			log.Debugf("✅ Connected to DSV peer via rendezvous: %s", p.ID)
 
 			// Protect DSV peers from being pruned by connection manager
 			if ConnManager != nil {
@@ -886,8 +886,8 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 	if discoveredCount == 0 {
 		log.Debugf("No DSV peers discovered on rendezvous point %s (DHT may still be bootstrapping)", rendezvousPoint)
 	} else {
-		// Always log discovery results, even if no new connections
-		log.Infof("DSV rendezvous discovery: found %d peers, %d already connected, %d newly connected, %d skipped (self)",
+		// Log discovery results at debug level to reduce log noise
+		log.Debugf("DSV rendezvous discovery: found %d peers, %d already connected, %d newly connected, %d skipped (self)",
 			discoveredCount, alreadyConnectedCount, connectedCount, skippedCount)
 	}
 }

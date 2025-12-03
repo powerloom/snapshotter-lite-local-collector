@@ -113,8 +113,8 @@ func AddPeerConnection(ctx context.Context, host host.Host, relayerAddr string) 
 		log.Errorf("Failed to connect to relayer %s: %s", peerInfo.ID, err)
 		return false
 	} else {
-		log.Infof("Connected to new relayer: %s", peerInfo.ID)
-		log.Infoln("Connected: ", host.Network().ConnsToPeer(peerInfo.ID))
+		log.Debugf("Connected to new relayer: %s", peerInfo.ID)
+		log.Debugln("Connected: ", host.Network().ConnsToPeer(peerInfo.ID))
 		return true
 	}
 }
