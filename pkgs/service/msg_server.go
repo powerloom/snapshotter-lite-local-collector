@@ -893,10 +893,13 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 	}
 }
 
-// publishHeartbeats sends frequent test submissions to maintain mesh membership and help form the mesh
+// publishHeartbeats sends frequent messages to maintain mesh membership and help form the mesh
+// Uses two different message types:
+// 1. Discovery topic (/0): Lightweight heartbeat with nil submissions (recognized and skipped by DSV)
+// 2. Submissions topic (/all): Test submission with empty CID (recognized as heartbeat but helps mesh formation)
 func (s *server) publishHeartbeats() {
-	// CRITICAL: Send test submissions frequently to maintain active status and help mesh formation
-	ticker := time.NewTicker(10 * time.Second) // Send test submission every 10 seconds
+	// CRITICAL: Send messages frequently to maintain active status and help mesh formation
+	ticker := time.NewTicker(10 * time.Second) // Send every 10 seconds
 	defer ticker.Stop()
 
 	messageCounter := uint64(0)
@@ -904,53 +907,62 @@ func (s *server) publishHeartbeats() {
 	for range ticker.C {
 		messageCounter++
 
-		// Create a test submission that looks like a real submission to help form the mesh
-		// This is independent of the snapshotter node and helps establish mesh connectivity
-		testSubmission := &pkgs.SnapshotSubmission{
-			Request: &pkgs.Request{
-				EpochId:     0, // Use epoch 0 for test submissions (discovery topic)
-				ProjectId:   "test:mesh-formation:local-collector",
-				SnapshotCid: fmt.Sprintf("test-cid-%d-%d", messageCounter, time.Now().Unix()),
-			},
-		}
-
-		// Create P2P message with test submission
-		p2pSubmission := &P2PSnapshotSubmission{
-			EpochID:       0, // Use epoch 0 for test submissions
-			Submissions:   []*pkgs.SnapshotSubmission{testSubmission},
-			SnapshotterID: deps.hostConn.ID().String(),
-			Signature:     []byte(fmt.Sprintf("test-submission-%d-%d", messageCounter, time.Now().Unix())),
-		}
-
-		msgBytes, err := json.Marshal(p2pSubmission)
-		if err != nil {
-			log.Debugf("Failed to marshal test submission: %v", err)
-			continue
-		}
-
-		// Publish to BOTH topics to maintain presence everywhere and help mesh formation
 		discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
 
-		// Publish to discovery topic
+		// Type 1: Lightweight heartbeat for discovery topic (/0)
+		// Uses nil submissions so DSV node skips it immediately (line 731 in unified/main.go)
 		if s.discoveryTopic != nil {
-			if err := s.discoveryTopic.Publish(context.Background(), msgBytes); err != nil {
-				log.Debugf("Failed to publish test submission to discovery: %v", err)
+			discoveryHeartbeat := &P2PSnapshotSubmission{
+				EpochID:       0,   // Epoch 0 for discovery topic
+				Submissions:   nil, // Nil so DSV recognizes as heartbeat and skips queueing
+				SnapshotterID: deps.hostConn.ID().String(),
+				Signature:     []byte(fmt.Sprintf("heartbeat-discovery-%d-%d", messageCounter, time.Now().Unix())),
+			}
+
+			discoveryBytes, err := json.Marshal(discoveryHeartbeat)
+			if err != nil {
+				log.Debugf("Failed to marshal discovery heartbeat: %v", err)
 			} else {
-				peersCount := len(s.pubsub.ListPeers(discoveryTopic))
-				if messageCounter%6 == 0 { // Log every minute
-					log.Debugf("Published test submission to discovery topic, peers: %d", peersCount)
+				if err := s.discoveryTopic.Publish(context.Background(), discoveryBytes); err != nil {
+					log.Debugf("Failed to publish heartbeat to discovery: %v", err)
+				} else {
+					peersCount := len(s.pubsub.ListPeers(discoveryTopic))
+					if messageCounter%6 == 0 { // Log every minute
+						log.Debugf("Published heartbeat to discovery topic, peers: %d", peersCount)
+					}
 				}
 			}
 		}
 
-		// Publish to submissions topic (more important for mesh formation)
+		// Type 2: Test submission for submissions topic (/all)
+		// Uses empty SnapshotCid so DSV recognizes as heartbeat but still helps mesh formation
 		if s.submissionsTopic != nil {
-			if err := s.submissionsTopic.Publish(context.Background(), msgBytes); err != nil {
-				log.Debugf("Failed to publish test submission to submissions: %v", err)
+			testSubmission := &pkgs.SnapshotSubmission{
+				Request: &pkgs.Request{
+					EpochId:     0, // Epoch 0 but will go to submissions topic
+					ProjectId:   "test:mesh-formation:local-collector",
+					SnapshotCid: "", // Empty CID so DSV recognizes as heartbeat (dequeuer.go line 229)
+				},
+			}
+
+			submissionsHeartbeat := &P2PSnapshotSubmission{
+				EpochID:       0,                                          // Epoch 0
+				Submissions:   []*pkgs.SnapshotSubmission{testSubmission}, // Non-nil but empty CID
+				SnapshotterID: deps.hostConn.ID().String(),
+				Signature:     []byte(fmt.Sprintf("heartbeat-submissions-%d-%d", messageCounter, time.Now().Unix())),
+			}
+
+			submissionsBytes, err := json.Marshal(submissionsHeartbeat)
+			if err != nil {
+				log.Debugf("Failed to marshal submissions heartbeat: %v", err)
 			} else {
-				peersCount := len(s.pubsub.ListPeers(submissionsTopic))
-				if messageCounter%6 == 0 { // Log every minute
-					log.Debugf("Published test submission to submissions topic, peers: %d", peersCount)
+				if err := s.submissionsTopic.Publish(context.Background(), submissionsBytes); err != nil {
+					log.Debugf("Failed to publish test submission to submissions: %v", err)
+				} else {
+					peersCount := len(s.pubsub.ListPeers(submissionsTopic))
+					if messageCounter%6 == 0 { // Log every minute
+						log.Debugf("Published test submission to submissions topic, peers: %d", peersCount)
+					}
 				}
 			}
 		}

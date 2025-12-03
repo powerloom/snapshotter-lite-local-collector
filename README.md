@@ -33,7 +33,7 @@ The Local Collector acts as an intermediary service that:
 - **Gossipsub Integration**: P2P broadcasting to decentralized sequencer network
 - **DHT-based Peer Discovery**: Automatic peer discovery for gossipsub mesh
 - **Connection Management**: Configurable connection pool limits
-- **Test Submissions**: Automatic test submissions to help form and maintain mesh connectivity
+- **Heartbeat Messages**: Two types of automatic heartbeat messages to help form and maintain mesh connectivity
 - **Health Check Endpoint**: HTTP health check endpoint for mesh readiness monitoring
 
 ## Peer Discovery Architecture
@@ -64,15 +64,17 @@ The local collector uses a **multi-mechanism discovery approach** to ensure reli
 
 The gossipsub mesh uses a two-level topic structure:
 
-- **Discovery Topic** (`/0`): Used for peer discovery and network joining
-  - Lightweight presence messages
+- **Discovery Topic** (`/powerloom/{prefix}/snapshot-submissions/0`): Used for peer discovery and network joining
+  - Lightweight presence messages (heartbeats)
   - Helps establish initial mesh connections
   - Prevents race conditions during network formation
+  - Heartbeat format: `Submissions: nil` (recognized and skipped by DSV nodes)
 
-- **Submissions Topic** (`/all`): Used for actual snapshot data transmission
+- **Submissions Topic** (`/powerloom/{prefix}/snapshot-submissions/all`): Used for actual snapshot data transmission
   - Full submission payloads
   - Primary data channel for DSV network
   - All snapshot submissions are published here
+  - Heartbeat format: `Submissions: [{EpochId: 0, SnapshotCid: ""}]` (recognized as heartbeat but helps mesh formation)
 
 ### Why Multiple Discovery Mechanisms?
 
@@ -254,16 +256,31 @@ snapshotter-node:
     test: ["CMD", "curl", "-f", "http://snapshotter-local-collector:8080/ready"]
 ```
 
-### Test Submissions
+### Heartbeat Messages
 
-The local collector automatically publishes test submissions every 10 seconds to help form and maintain the gossipsub mesh. These test submissions:
+The local collector automatically publishes heartbeat messages every 10 seconds to help form and maintain the gossipsub mesh. These are independent of the snapshotter node (not via gRPC) and use two different formats optimized for each topic:
 
-- Are independent of the snapshotter node (not via gRPC)
+#### Type 1: Discovery Topic Heartbeat (`/powerloom/{prefix}/snapshot-submissions/0`)
+
+- **Format**: `Submissions: nil` (null submissions array)
+- **Purpose**: Lightweight presence announcement for peer discovery
+- **DSV Recognition**: Skipped immediately at queue level (no processing overhead)
+- **Detection**: DSV node checks `epoch_id == 0 && submissions == nil`
+
+#### Type 2: Submissions Topic Heartbeat (`/powerloom/{prefix}/snapshot-submissions/all`)
+
+- **Format**: `Submissions: [{EpochId: 0, SnapshotCid: ""}]` (non-nil array with empty CID)
+- **Purpose**: Helps mesh formation on submissions topic while maintaining presence
+- **DSV Recognition**: Queued but skipped during validation (recognized as heartbeat)
+- **Detection**: DSV node checks `EpochId == 0 && SnapshotCid == ""` in dequeuer validation
+
+Both heartbeat types:
+- Are recognized by DSV nodes and skipped (not processed as real submissions)
 - Help establish mesh connectivity during startup
-- Maintain active presence in the mesh
+- Maintain active presence in the mesh to prevent pruning
 - Use project ID `test:mesh-formation:local-collector` for identification
 
-This ensures the mesh forms quickly even before the snapshotter node starts sending real submissions.
+This ensures the mesh forms quickly even before the snapshotter node starts sending real submissions, and prevents the mesh from being pruned due to inactivity.
 
 ## Integration with Snapshotter Node
 
