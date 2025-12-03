@@ -98,21 +98,35 @@ func (h *HealthServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// handleReady returns readiness status (only ready if mesh is healthy)
+// handleReady returns readiness status
+// Ready if mesh is healthy OR degraded (at least partially connected)
+// Not ready only if pruned (completely disconnected)
 func (h *HealthServer) handleReady(w http.ResponseWriter, r *http.Request) {
 	metrics := h.server.GetMeshHealthMetrics()
 
-	ready := metrics.State == MeshStateHealthy
+	// Consider ready if:
+	// 1. Mesh is healthy (2+ peers in both topics), OR
+	// 2. Mesh is degraded (1+ peers in at least one topic) - partial connectivity is acceptable
+	// Not ready only if pruned (0 peers in both topics)
+	ready := metrics.State == MeshStateHealthy || metrics.State == MeshStateDegraded
 
 	if ready {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		response := map[string]interface{}{
+			"ready":             true,
+			"mesh_state":        string(metrics.State),
+			"discovery_peers":   metrics.DiscoveryPeerCount,
+			"submissions_peers": metrics.SubmissionsPeerCount,
+		}
+		json.NewEncoder(w).Encode(response)
 	} else {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		response := map[string]interface{}{
-			"ready":      false,
-			"mesh_state": string(metrics.State),
-			"reason":     "Mesh is not healthy",
+			"ready":             false,
+			"mesh_state":        string(metrics.State),
+			"reason":            "Mesh is pruned - no peers connected",
+			"discovery_peers":   metrics.DiscoveryPeerCount,
+			"submissions_peers": metrics.SubmissionsPeerCount,
 		}
 		json.NewEncoder(w).Encode(response)
 	}
