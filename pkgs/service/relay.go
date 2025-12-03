@@ -173,6 +173,11 @@ func CreateLibP2pHost() error {
 	P2PHost.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
 			log.Debugf("P2P peer connected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
+			// Tag all incoming connections to protect them from pruning
+			// This ensures peers that connect to us (not just ones we discover) are protected
+			if ConnManager != nil {
+				ConnManager.TagPeer(conn.RemotePeer(), "inbound-peer", 25) // Low priority but still protected
+			}
 		},
 		DisconnectedF: func(_ network.Network, conn network.Conn) {
 			log.Debugf("P2P peer disconnected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())

@@ -1102,6 +1102,19 @@ func (s *server) monitorMeshStatus() {
 		submissionPeers := len(s.pubsub.ListPeers(submissionsTopic))
 		totalConnectedPeers := len(deps.hostConn.Network().Peers())
 
+		// CRITICAL: Periodically re-tag all mesh peers to prevent connection manager from pruning them
+		// Peer tags may expire or get cleared, so we need to refresh them regularly
+		if ConnManager != nil {
+			// Re-tag all peers in the discovery topic mesh
+			for _, peerID := range s.pubsub.ListPeers(discoveryTopic) {
+				ConnManager.TagPeer(peerID, "topic-peer", 50)
+			}
+			// Re-tag all peers in the submissions topic mesh
+			for _, peerID := range s.pubsub.ListPeers(submissionsTopic) {
+				ConnManager.TagPeer(peerID, "topic-peer", 50)
+			}
+		}
+
 		// Update metrics and detect state transitions
 		s.updateMeshMetrics(discoveryPeers, submissionPeers, totalConnectedPeers)
 
