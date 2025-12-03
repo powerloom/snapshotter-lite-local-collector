@@ -118,6 +118,24 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 		}).Info("🔔 Mesh lifecycle event")
 	})
 
+	// Register Slack alert hook if configured
+	if config.SettingsObj.SlackWebhookURL != "" {
+		InitializeSlackAlerts(config.SettingsObj.SlackWebhookURL)
+		if SlackAlertInstance != nil && SlackAlertInstance.enabled {
+			server.RegisterMeshLifecycleHook(func(event string, metrics MeshHealthMetrics) {
+				// Only send alerts for critical events
+				if metrics.State == MeshStatePruned ||
+					event == "zero_peer_publish_attempt" ||
+					event == "mesh_state_transition:healthy->pruned" ||
+					event == "mesh_state_transition:degraded->pruned" ||
+					(metrics.State == MeshStateDegraded && metrics.ConsecutiveLowPeerCounts > 10) {
+					SlackAlertInstance.SendMeshAlert(event, metrics)
+				}
+			})
+			log.Info("Slack mesh alerts enabled")
+		}
+	}
+
 	return server
 }
 

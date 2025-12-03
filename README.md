@@ -319,7 +319,65 @@ docker logs -f <container-name> 2>&1 | grep "🔔 Mesh lifecycle event"
 docker logs -f <container-name> 2>&1 | grep "CRITICAL.*0 peers in topic mesh"
 ```
 
-### Setting Up Alerts
+### Slack Alerts (Recommended)
+
+The local collector supports Slack webhook alerts for critical mesh events. This is the fastest way to get notified when the mesh is pruned.
+
+#### Setup
+
+1. **Create a Slack Incoming Webhook**:
+   - Go to https://api.slack.com/apps
+   - Create a new app or select existing
+   - Enable "Incoming Webhooks"
+   - Click "Add New Webhook to Workspace"
+   - **Select the channel** where you want alerts (this is the only configuration needed)
+   - Copy the webhook URL
+   - **Note**: You don't need to configure any JSON structure in Slack's editor - the local collector sends formatted JSON automatically
+
+2. **Configure Environment Variable**:
+   ```bash
+   export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+   ```
+
+3. **Add to Docker Compose**:
+   ```yaml
+   environment:
+     - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+   ```
+
+#### Alert Triggers
+
+Slack alerts are sent for:
+- **Mesh pruned** (`mesh_state_transition:*->pruned`)
+- **Zero-peer publish attempts** (`zero_peer_publish_attempt`)
+- **Extended degraded state** (degraded for 10+ consecutive checks)
+
+#### Alert Format
+
+Slack alerts include:
+- Current mesh state
+- Peer counts (discovery, submissions, total connected)
+- Consecutive low peer count periods
+- Total pruning events since startup
+- Last pruning time
+- Uptime
+- Event type
+
+Example alert:
+```
+🚨 Gossipsub Mesh Alert: mesh_state_transition:healthy->pruned
+State: pruned
+Severity: CRITICAL
+Discovery Peers: 0
+Submissions Peers: 0
+Total Connected: 0
+Consecutive Low: 784
+Total Pruning Events: 1
+Last Pruning: 2025-12-03T09:08:23Z
+Uptime: 7h 32m
+```
+
+### Setting Up Other Alerts
 
 #### Example: Prometheus Alert Rules
 
