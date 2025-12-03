@@ -99,34 +99,33 @@ func (h *HealthServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleReady returns readiness status
-// Ready if mesh is healthy OR degraded (at least partially connected)
-// Not ready only if pruned (completely disconnected)
+// Ready if service is initialized and can accept submissions
+// Mesh connectivity is not required for readiness - submissions will be queued/buffered
 func (h *HealthServer) handleReady(w http.ResponseWriter, r *http.Request) {
 	metrics := h.server.GetMeshHealthMetrics()
 
-	// Consider ready if:
-	// 1. Mesh is healthy (2+ peers in both topics), OR
-	// 2. Mesh is degraded (1+ peers in at least one topic) - partial connectivity is acceptable
-	// Not ready only if pruned (0 peers in both topics)
-	ready := metrics.State == MeshStateHealthy || metrics.State == MeshStateDegraded
+	// Service is ready if it has been initialized (uptime > 5 seconds)
+	// Mesh state doesn't block readiness - the service can accept gRPC submissions
+	// regardless of mesh state. Submissions will be queued and sent when mesh forms.
+	serviceInitialized := metrics.Uptime > 5*time.Second
 
-	if ready {
+	if serviceInitialized {
 		w.WriteHeader(http.StatusOK)
 		response := map[string]interface{}{
 			"ready":             true,
 			"mesh_state":        string(metrics.State),
 			"discovery_peers":   metrics.DiscoveryPeerCount,
 			"submissions_peers": metrics.SubmissionsPeerCount,
+			"uptime_seconds":    int(metrics.Uptime.Seconds()),
 		}
 		json.NewEncoder(w).Encode(response)
 	} else {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		response := map[string]interface{}{
-			"ready":             false,
-			"mesh_state":        string(metrics.State),
-			"reason":            "Mesh is pruned - no peers connected",
-			"discovery_peers":   metrics.DiscoveryPeerCount,
-			"submissions_peers": metrics.SubmissionsPeerCount,
+			"ready":          false,
+			"mesh_state":     string(metrics.State),
+			"reason":         "Service still initializing",
+			"uptime_seconds": int(metrics.Uptime.Seconds()),
 		}
 		json.NewEncoder(w).Encode(response)
 	}

@@ -697,8 +697,7 @@ func (s *server) initializeTopics() {
 
 	// Discover peers on topic names (in addition to rendezvous point)
 	go func() {
-		log.Info("Starting topic-based peer discovery (will begin after 15s delay)")
-		time.Sleep(15 * time.Second) // Wait for DHT to stabilize
+		log.Info("Starting topic-based peer discovery")
 		routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
 		log.Info("Topic-based peer discovery started - will run every 30 seconds")
 
