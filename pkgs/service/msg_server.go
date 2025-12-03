@@ -123,16 +123,26 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 		InitializeSlackAlerts(config.SettingsObj.SlackWebhookURL)
 		if SlackAlertInstance != nil && SlackAlertInstance.enabled {
 			server.RegisterMeshLifecycleHook(func(event string, metrics MeshHealthMetrics) {
-				// Only send alerts for critical events
-				if metrics.State == MeshStatePruned ||
-					event == "zero_peer_publish_attempt" ||
-					event == "mesh_state_transition:healthy->pruned" ||
+				// Only send alerts for critical events (throttling handled inside SendMeshAlert)
+				// Focus on state transitions and critical conditions, not every periodic check
+				if event == "mesh_state_transition:healthy->pruned" ||
 					event == "mesh_state_transition:degraded->pruned" ||
-					(metrics.State == MeshStateDegraded && metrics.ConsecutiveLowPeerCounts > 10) {
+					event == "mesh_state_transition:pruned->healthy" ||
+					event == "mesh_state_transition:healthy->degraded" ||
+					event == "mesh_state_transition:degraded->healthy" ||
+					event == "zero_peer_publish_attempt" ||
+					event == "mesh_recovered" {
+					SlackAlertInstance.SendMeshAlert(event, metrics)
+				}
+				// For sustained bad states, only alert if consecutive low counts indicate real issue
+				// (throttling will prevent spam)
+				if (metrics.State == MeshStatePruned || metrics.State == MeshStateDegraded) &&
+					metrics.ConsecutiveLowPeerCounts > 10 &&
+					(event == "mesh_peer_count_change" || event == "mesh_recovery_attempt") {
 					SlackAlertInstance.SendMeshAlert(event, metrics)
 				}
 			})
-			log.Info("Slack mesh alerts enabled")
+			log.Info("Slack mesh alerts enabled with throttling")
 		}
 	}
 

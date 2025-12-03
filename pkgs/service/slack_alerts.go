@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -14,9 +15,14 @@ var SlackAlertInstance *SlackAlertService
 
 // SlackAlertService handles sending alerts to Slack via webhook
 type SlackAlertService struct {
-	webhookURL string
-	client     *http.Client
-	enabled    bool
+	webhookURL        string
+	client            *http.Client
+	enabled           bool
+	lastAlertTime     time.Time
+	lastAlertState    MeshState
+	lastAlertEvent    string
+	alertThrottleMu   sync.RWMutex
+	startupGracePeriod time.Duration
 }
 
 // SlackMessage represents a Slack webhook payload
@@ -59,16 +65,29 @@ func InitializeSlackAlerts(webhookURL string) {
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		enabled: true,
+		enabled:           true,
+		startupGracePeriod: 5 * time.Minute, // Don't alert during first 5 minutes (startup period)
 	}
 	log.Info("Slack alerts initialized")
 }
 
-// SendMeshAlert sends a mesh lifecycle alert to Slack
+// SendMeshAlert sends a mesh lifecycle alert to Slack with throttling
 func (s *SlackAlertService) SendMeshAlert(event string, metrics MeshHealthMetrics) {
 	if !s.enabled {
 		return
 	}
+
+	// Check if we should throttle this alert
+	if !s.shouldSendAlert(event, metrics) {
+		return
+	}
+
+	// Update last alert tracking
+	s.alertThrottleMu.Lock()
+	s.lastAlertTime = time.Now()
+	s.lastAlertState = metrics.State
+	s.lastAlertEvent = event
+	s.alertThrottleMu.Unlock()
 
 	var color string
 	var emoji string
@@ -165,5 +184,78 @@ func (s *SlackAlertService) sendMessage(message SlackMessage) {
 	}
 
 	log.Debugf("Slack alert sent successfully: %s", message.Attachments[0].Title)
+}
+
+// shouldSendAlert determines if an alert should be sent based on throttling rules
+func (s *SlackAlertService) shouldSendAlert(event string, metrics MeshHealthMetrics) bool {
+	s.alertThrottleMu.RLock()
+	defer s.alertThrottleMu.RUnlock()
+
+	now := time.Now()
+
+	// Suppress alerts during startup grace period (first 5 minutes)
+	if metrics.Uptime < s.startupGracePeriod {
+		log.Debugf("Suppressing alert during startup grace period (uptime: %v)", metrics.Uptime)
+		return false
+	}
+
+	// Always send alerts on state transitions (these are important)
+	if event == "mesh_state_transition:healthy->pruned" ||
+		event == "mesh_state_transition:degraded->pruned" ||
+		event == "mesh_state_transition:pruned->healthy" ||
+		event == "mesh_state_transition:healthy->degraded" ||
+		event == "mesh_state_transition:degraded->healthy" {
+		return true
+	}
+
+	// For zero-peer publish attempts, only alert if we haven't alerted recently
+	if event == "zero_peer_publish_attempt" {
+		if now.Sub(s.lastAlertTime) < 5*time.Minute {
+			log.Debugf("Throttling zero-peer publish alert (last alert: %v ago)", now.Sub(s.lastAlertTime))
+			return false
+		}
+		return true
+	}
+
+	// For degraded state alerts, only send if:
+	// 1. State changed since last alert, OR
+	// 2. It's been at least 2 minutes since last alert for this state
+	if metrics.State == MeshStateDegraded {
+		if metrics.State != s.lastAlertState {
+			return true // State changed
+		}
+		if now.Sub(s.lastAlertTime) < 2*time.Minute {
+			log.Debugf("Throttling degraded state alert (last alert: %v ago)", now.Sub(s.lastAlertTime))
+			return false
+		}
+		return true
+	}
+
+	// For pruned state, only send if:
+	// 1. State changed since last alert, OR
+	// 2. It's been at least 60 seconds since last alert for this state
+	if metrics.State == MeshStatePruned {
+		if metrics.State != s.lastAlertState {
+			return true // State changed
+		}
+		if now.Sub(s.lastAlertTime) < 60*time.Second {
+			log.Debugf("Throttling pruned state alert (last alert: %v ago)", now.Sub(s.lastAlertTime))
+			return false
+		}
+		return true
+	}
+
+	// For recovery events, always send
+	if event == "mesh_recovered" {
+		return true
+	}
+
+	// Default: don't send if we've alerted recently for the same state
+	if metrics.State == s.lastAlertState && now.Sub(s.lastAlertTime) < 5*time.Minute {
+		log.Debugf("Throttling alert for same state (last alert: %v ago)", now.Sub(s.lastAlertTime))
+		return false
+	}
+
+	return true
 }
 
