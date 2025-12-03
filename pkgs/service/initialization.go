@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"proto-snapshot-server/config"
 	"sync"
-	"time"
 
 	logging "github.com/ipfs/go-log/v2"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -70,9 +69,9 @@ func InitializeService() error {
 		return fmt.Errorf("failed to configure DHT")
 	}
 
-	// Give DHT some time to bootstrap and discover peers after configuration
-	log.Info("Waiting 30 seconds for DHT to discover peers...")
-	time.Sleep(30 * time.Second)
+	// DHT bootstraps asynchronously - no need to wait
+	// Peer discovery happens in background via topic discovery and rendezvous points
+	log.Debug("DHT configured, bootstrapping in background")
 
 	var err error
 

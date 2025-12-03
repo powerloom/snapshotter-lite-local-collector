@@ -1089,7 +1089,7 @@ func (s *server) monitorMeshStatus() {
 	totalConnectedPeers := len(deps.hostConn.Network().Peers())
 	s.updateMeshMetrics(discoveryPeers, submissionPeers, totalConnectedPeers)
 
-	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds for faster recovery
+	ticker := time.NewTicker(5 * time.Second) // Check every 5 seconds for faster state detection
 	defer ticker.Stop()
 
 	lastRecoveryAttempt := time.Now()

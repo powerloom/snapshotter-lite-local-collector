@@ -193,19 +193,30 @@ func (s *SlackAlertService) shouldSendAlert(event string, metrics MeshHealthMetr
 
 	now := time.Now()
 
-	// Suppress alerts during startup grace period (first 5 minutes)
+	// Always send alerts on good state transitions (mesh forming/recovering), even during startup
+	// These are important indicators that the mesh is working correctly
+	if event == "mesh_state_transition:pruned->healthy" ||
+		event == "mesh_state_transition:pruned->degraded" ||
+		event == "mesh_state_transition:degraded->healthy" {
+		return true
+	}
+
+	// For bad transitions (mesh degrading), suppress during startup grace period
+	// but allow after startup to catch real issues
+	if event == "mesh_state_transition:healthy->pruned" ||
+		event == "mesh_state_transition:degraded->pruned" ||
+		event == "mesh_state_transition:healthy->degraded" {
+		if metrics.Uptime < s.startupGracePeriod {
+			log.Debugf("Suppressing bad state transition alert during startup grace period (uptime: %v)", metrics.Uptime)
+			return false
+		}
+		return true
+	}
+
+	// Suppress other alerts during startup grace period (first 5 minutes)
 	if metrics.Uptime < s.startupGracePeriod {
 		log.Debugf("Suppressing alert during startup grace period (uptime: %v)", metrics.Uptime)
 		return false
-	}
-
-	// Always send alerts on state transitions (these are important)
-	if event == "mesh_state_transition:healthy->pruned" ||
-		event == "mesh_state_transition:degraded->pruned" ||
-		event == "mesh_state_transition:pruned->healthy" ||
-		event == "mesh_state_transition:healthy->degraded" ||
-		event == "mesh_state_transition:degraded->healthy" {
-		return true
 	}
 
 	// For zero-peer publish attempts, only alert if we haven't alerted recently
