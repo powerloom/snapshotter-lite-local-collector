@@ -99,34 +99,22 @@ func (h *HealthServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleReady returns readiness status
-// Ready if service is initialized and can accept submissions
-// Mesh connectivity is not required for readiness - submissions will be queued/buffered
+// Ready as soon as the HTTP server is listening - mesh formation happens in background
+// The service can accept gRPC submissions immediately, they will be queued/buffered
+// until the mesh forms. This allows dependent services to start without waiting.
 func (h *HealthServer) handleReady(w http.ResponseWriter, r *http.Request) {
 	metrics := h.server.GetMeshHealthMetrics()
 
-	// Service is ready if it has been initialized (uptime > 5 seconds)
+	// Service is ready immediately when HTTP server is listening
 	// Mesh state doesn't block readiness - the service can accept gRPC submissions
 	// regardless of mesh state. Submissions will be queued and sent when mesh forms.
-	serviceInitialized := metrics.Uptime > 5*time.Second
-
-	if serviceInitialized {
-		w.WriteHeader(http.StatusOK)
-		response := map[string]interface{}{
-			"ready":             true,
-			"mesh_state":        string(metrics.State),
-			"discovery_peers":   metrics.DiscoveryPeerCount,
-			"submissions_peers": metrics.SubmissionsPeerCount,
-			"uptime_seconds":    int(metrics.Uptime.Seconds()),
-		}
-		json.NewEncoder(w).Encode(response)
-	} else {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		response := map[string]interface{}{
-			"ready":          false,
-			"mesh_state":     string(metrics.State),
-			"reason":         "Service still initializing",
-			"uptime_seconds": int(metrics.Uptime.Seconds()),
-		}
-		json.NewEncoder(w).Encode(response)
+	w.WriteHeader(http.StatusOK)
+	response := map[string]interface{}{
+		"ready":             true,
+		"mesh_state":        string(metrics.State),
+		"discovery_peers":   metrics.DiscoveryPeerCount,
+		"submissions_peers": metrics.SubmissionsPeerCount,
+		"uptime_seconds":    int(metrics.Uptime.Seconds()),
 	}
+	json.NewEncoder(w).Encode(response)
 }
