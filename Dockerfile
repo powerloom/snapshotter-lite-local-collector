@@ -15,8 +15,11 @@ COPY . .
 # Build the Go application
 RUN CGO_ENABLED=0 GOOS=linux go build -o /snapshotter-local-collector ./cmd/main.go
 
-# Use a minimal base image
-FROM scratch
+# Use alpine base image for healthcheck tools (curl)
+FROM alpine:latest
+
+# Install curl for healthcheck
+RUN apk add --no-cache curl ca-certificates
 
 # Copy SSL certificates from the builder stage
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/

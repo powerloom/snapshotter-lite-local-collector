@@ -1012,7 +1012,13 @@ func (s *server) updateMeshMetrics(discoveryPeers, submissionPeers, totalConnect
 		event := fmt.Sprintf("mesh_state_transition:%s->%s", oldState, newState)
 		s.triggerMeshLifecycleHook(event, s.meshMetrics)
 
-		log.WithFields(log.Fields{
+		// Determine log level based on transition direction
+		// Bad transitions: healthy->degraded, healthy->pruned, degraded->pruned
+		// Good transitions: pruned->healthy, pruned->degraded, degraded->healthy
+		isBadTransition := (oldState == MeshStateHealthy && newState != MeshStateHealthy) ||
+			(oldState == MeshStateDegraded && newState == MeshStatePruned)
+
+		logFields := log.Fields{
 			"old_state":            oldState,
 			"new_state":            newState,
 			"discovery_peers":      discoveryPeers,
@@ -1021,7 +1027,13 @@ func (s *server) updateMeshMetrics(discoveryPeers, submissionPeers, totalConnect
 			"consecutive_low":      s.meshMetrics.ConsecutiveLowPeerCounts,
 			"total_pruning_events": s.meshMetrics.TotalPruningEvents,
 			"uptime_seconds":       int(s.meshMetrics.Uptime.Seconds()),
-		}).Errorf("🚨 MESH STATE TRANSITION: %s -> %s", oldState, newState)
+		}
+
+		if isBadTransition {
+			log.WithFields(logFields).Errorf("🚨 MESH STATE TRANSITION: %s -> %s", oldState, newState)
+		} else {
+			log.WithFields(logFields).Infof("✅ MESH STATE TRANSITION: %s -> %s", oldState, newState)
+		}
 	} else if discoveryPeers != oldDiscoveryPeers || submissionPeers != oldSubmissionPeers {
 		// Peer count changed but state didn't
 		event := fmt.Sprintf("mesh_peer_count_change:discovery=%d->%d,submissions=%d->%d",
