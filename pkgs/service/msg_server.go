@@ -146,12 +146,13 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 		}
 	}
 
-	// Initialize health check HTTP server
+	// Initialize health check HTTP server (always initialize, default to 8080 if not set)
 	healthCheckPort := config.SettingsObj.HealthCheckPort
-	if healthCheckPort != "" {
-		InitializeHealthServer(server, healthCheckPort)
-		log.Infof("Health check server initialized on port %s", healthCheckPort)
+	if healthCheckPort == "" {
+		healthCheckPort = "8080" // Default port
 	}
+	InitializeHealthServer(server, healthCheckPort)
+	log.Infof("Health check server initialized on port %s", healthCheckPort)
 
 	return server
 }
