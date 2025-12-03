@@ -52,6 +52,9 @@ type Settings struct {
 
 	// Alerting configuration
 	SlackWebhookURL string
+
+	// Health check server port
+	HealthCheckPort string
 }
 
 func LoadConfig() {
@@ -81,6 +84,7 @@ func LoadConfig() {
 	config.SignerAccountAddress = os.Getenv("SIGNER_ACCOUNT_ADDRESS")
 	config.TrustedRelayersListUrl = getEnvWithDefault("TRUSTED_RELAYERS_LIST_URL", "https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/relayers.json")
 	config.SlackWebhookURL = os.Getenv("SLACK_WEBHOOK_URL")
+	config.HealthCheckPort = getEnvWithDefault("LOCAL_COLLECTOR_HEALTH_CHECK_PORT", "8080")
 
 	// Load private key from file or env
 	config.RelayerPrivateKey = loadPrivateKey()

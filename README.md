@@ -33,6 +33,8 @@ The Local Collector acts as an intermediary service that:
 - **Gossipsub Integration**: P2P broadcasting to decentralized sequencer network
 - **DHT-based Peer Discovery**: Automatic peer discovery for gossipsub mesh
 - **Connection Management**: Configurable connection pool limits
+- **Test Submissions**: Automatic test submissions to help form and maintain mesh connectivity
+- **Health Check Endpoint**: HTTP health check endpoint for mesh readiness monitoring
 
 ## Peer Discovery Architecture
 
@@ -201,6 +203,68 @@ snapshotter-lite-local-collector/
 └── README.md             # This file
 ```
 
+## Health Check Endpoint
+
+The local collector provides HTTP health check endpoints for monitoring mesh status and readiness:
+
+### Endpoints
+
+- **`GET /health`**: Returns detailed health status with mesh metrics
+- **`GET /ready`**: Returns readiness status (200 OK if mesh is healthy, 503 if not)
+
+### Health Check Response
+
+```json
+{
+  "status": "healthy",
+  "mesh_state": "healthy",
+  "mesh_ready": true,
+  "discovery_peers": 3,
+  "submissions_peers": 3,
+  "total_connected": 5,
+  "uptime_seconds": 3600,
+  "total_pruning_events": 0,
+  "timestamp": "2025-12-03T16:30:00Z"
+}
+```
+
+### Using Health Check for Snapshotter Node Dependency
+
+The snapshotter node can wait for the local collector to be ready before starting:
+
+```bash
+# Wait for local collector to be ready
+until curl -f http://localhost:8080/ready; do
+  echo "Waiting for local collector mesh to form..."
+  sleep 5
+done
+
+# Start snapshotter node
+python -m snapshotter.main
+```
+
+Or in Docker Compose:
+
+```yaml
+snapshotter-node:
+  depends_on:
+    snapshotter-local-collector:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://snapshotter-local-collector:8080/ready"]
+```
+
+### Test Submissions
+
+The local collector automatically publishes test submissions every 10 seconds to help form and maintain the gossipsub mesh. These test submissions:
+
+- Are independent of the snapshotter node (not via gRPC)
+- Help establish mesh connectivity during startup
+- Maintain active presence in the mesh
+- Use project ID `test:mesh-formation:local-collector` for identification
+
+This ensures the mesh forms quickly even before the snapshotter node starts sending real submissions.
+
 ## Integration with Snapshotter Node
 
 The local collector receives submissions from snapshotter nodes via gRPC. The snapshotter node must:
@@ -208,6 +272,7 @@ The local collector receives submissions from snapshotter nodes via gRPC. The sn
 1. Use the same protobuf definition (`submission.proto`)
 2. Include `protocolState` and `nodeVersion` fields in submissions
 3. Connect to the local collector's gRPC endpoint
+4. **Recommended**: Wait for `/ready` endpoint before starting to ensure mesh is formed
 
 See the main repository's README for protobuf regeneration instructions for the Python snapshotter node.
 

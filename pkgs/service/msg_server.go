@@ -92,7 +92,7 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 		pubsub:         gossiper,
 		joinedTopics:   make(map[string]*pubsub.Topic),
 		meshMetrics: MeshHealthMetrics{
-			State:     MeshStateHealthy,
+			State:     MeshStatePruned, // Start as pruned until mesh is actually checked
 			StartTime: time.Now(),
 		},
 		meshLifecycleHooks: make([]MeshLifecycleHook, 0),
@@ -144,6 +144,13 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 			})
 			log.Info("Slack mesh alerts enabled with throttling")
 		}
+	}
+
+	// Initialize health check HTTP server
+	healthCheckPort := config.SettingsObj.HealthCheckPort
+	if healthCheckPort != "" {
+		InitializeHealthServer(server, healthCheckPort)
+		log.Infof("Health check server initialized on port %s", healthCheckPort)
 	}
 
 	return server
@@ -886,10 +893,10 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 	}
 }
 
-// publishHeartbeats sends frequent heartbeat messages to maintain mesh membership
+// publishHeartbeats sends frequent test submissions to maintain mesh membership and help form the mesh
 func (s *server) publishHeartbeats() {
-	// CRITICAL: Much more frequent heartbeats to maintain active status
-	ticker := time.NewTicker(10 * time.Second) // Heartbeat every 10 seconds
+	// CRITICAL: Send test submissions frequently to maintain active status and help mesh formation
+	ticker := time.NewTicker(10 * time.Second) // Send test submission every 10 seconds
 	defer ticker.Stop()
 
 	messageCounter := uint64(0)
@@ -897,41 +904,53 @@ func (s *server) publishHeartbeats() {
 	for range ticker.C {
 		messageCounter++
 
-		// Create a varied heartbeat message to show activity
-		heartbeat := &P2PSnapshotSubmission{
-			EpochID:       0,   // Use epoch 0 for heartbeats
-			Submissions:   nil, // No actual submissions in heartbeat
-			SnapshotterID: deps.hostConn.ID().String(),
-			Signature:     []byte(fmt.Sprintf("heartbeat-%d-%d", messageCounter, time.Now().Unix())),
+		// Create a test submission that looks like a real submission to help form the mesh
+		// This is independent of the snapshotter node and helps establish mesh connectivity
+		testSubmission := &pkgs.SnapshotSubmission{
+			Request: &pkgs.Request{
+				EpochId:     0, // Use epoch 0 for test submissions (discovery topic)
+				ProjectId:   "test:mesh-formation:local-collector",
+				SnapshotCid: fmt.Sprintf("test-cid-%d-%d", messageCounter, time.Now().Unix()),
+			},
 		}
 
-		msgBytes, err := json.Marshal(heartbeat)
+		// Create P2P message with test submission
+		p2pSubmission := &P2PSnapshotSubmission{
+			EpochID:       0, // Use epoch 0 for test submissions
+			Submissions:   []*pkgs.SnapshotSubmission{testSubmission},
+			SnapshotterID: deps.hostConn.ID().String(),
+			Signature:     []byte(fmt.Sprintf("test-submission-%d-%d", messageCounter, time.Now().Unix())),
+		}
+
+		msgBytes, err := json.Marshal(p2pSubmission)
 		if err != nil {
-			log.Debugf("Failed to marshal heartbeat: %v", err)
+			log.Debugf("Failed to marshal test submission: %v", err)
 			continue
 		}
 
-		// Publish to BOTH topics to maintain presence everywhere
+		// Publish to BOTH topics to maintain presence everywhere and help mesh formation
 		discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
+
+		// Publish to discovery topic
 		if s.discoveryTopic != nil {
 			if err := s.discoveryTopic.Publish(context.Background(), msgBytes); err != nil {
-				log.Debugf("Failed to publish heartbeat to discovery: %v", err)
+				log.Debugf("Failed to publish test submission to discovery: %v", err)
 			} else {
 				peersCount := len(s.pubsub.ListPeers(discoveryTopic))
 				if messageCounter%6 == 0 { // Log every minute
-					log.Debugf("Published heartbeat to discovery topic, peers: %d", peersCount)
+					log.Debugf("Published test submission to discovery topic, peers: %d", peersCount)
 				}
 			}
 		}
 
-		// Also publish to submissions topic
+		// Publish to submissions topic (more important for mesh formation)
 		if s.submissionsTopic != nil {
 			if err := s.submissionsTopic.Publish(context.Background(), msgBytes); err != nil {
-				log.Debugf("Failed to publish heartbeat to submissions: %v", err)
+				log.Debugf("Failed to publish test submission to submissions: %v", err)
 			} else {
 				peersCount := len(s.pubsub.ListPeers(submissionsTopic))
 				if messageCounter%6 == 0 { // Log every minute
-					log.Debugf("Published heartbeat to submissions topic, peers: %d", peersCount)
+					log.Debugf("Published test submission to submissions topic, peers: %d", peersCount)
 				}
 			}
 		}
@@ -1039,6 +1058,13 @@ func (s *server) GetMeshHealthMetrics() MeshHealthMetrics {
 
 // monitorMeshStatus periodically checks mesh membership and recovers from pruning
 func (s *server) monitorMeshStatus() {
+	// Do an immediate check on startup to set initial state correctly
+	discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
+	discoveryPeers := len(s.pubsub.ListPeers(discoveryTopic))
+	submissionPeers := len(s.pubsub.ListPeers(submissionsTopic))
+	totalConnectedPeers := len(deps.hostConn.Network().Peers())
+	s.updateMeshMetrics(discoveryPeers, submissionPeers, totalConnectedPeers)
+
 	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds for faster recovery
 	defer ticker.Stop()
 
