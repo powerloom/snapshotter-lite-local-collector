@@ -240,23 +240,19 @@ func EstablishSequencerConnection() error {
 	sequencerMu.Lock()
 	defer sequencerMu.Unlock()
 
-	// Clear existing connection if any
-	if P2PHost != nil {
-		if err := P2PHost.Close(); err != nil {
-			log.Warnf("Error closing existing connection: %v", err)
+	// CRITICAL: Only create host if it doesn't exist
+	// DO NOT close existing host - it's shared with gossipsub!
+	// Closing the host would kill all gossipsub connections
+	if P2PHost == nil {
+		// 1. Create properly configured host (only if it doesn't exist)
+		if err := CreateLibP2pHost(); err != nil {
+			return fmt.Errorf("failed to create libp2p host: %w", err)
 		}
-		// Important: Signal that connection is being reset
-		// This should trigger cleanup of existing stream pool
-		P2PHost = nil
-		SequencerID = ""
+		// Update deps.hostConn if gossipsub hasn't been initialized yet
+		if deps.hostConn == nil {
+			deps.hostConn = P2PHost
+		}
 	}
-
-	// 1. Create properly configured host
-	if err := CreateLibP2pHost(); err != nil {
-		return fmt.Errorf("failed to create libp2p host: %w", err)
-	}
-
-	// No need to reassign P2PHost as it's already set in CreateLibP2pHost()
 
 	// 2. Get sequencer info
 	sequencer, err := fetchSequencer(
@@ -278,13 +274,29 @@ func EstablishSequencerConnection() error {
 		return fmt.Errorf("failed to get addr info: %w", err)
 	}
 
-	// 4. Set sequencer ID
+	// 4. Check if we're already connected to the right sequencer
+	if SequencerID == sequencerInfo.ID {
+		// Check connection status
+		if P2PHost.Network().Connectedness(SequencerID) == network.Connected {
+			log.Debugf("Already connected to sequencer %s, skipping refresh", SequencerID)
+			return nil
+		}
+	}
+
+	// 5. Close ONLY the sequencer connection (not the entire host!)
+	if SequencerID != "" && P2PHost != nil {
+		if err := P2PHost.Network().ClosePeer(SequencerID); err != nil {
+			log.Debugf("Error closing connection to previous sequencer: %v", err)
+		}
+	}
+
+	// 6. Set sequencer ID
 	SequencerID = sequencerInfo.ID
 	if SequencerID.String() == "" {
 		return fmt.Errorf("empty sequencer ID")
 	}
 
-	// 5. Establish connection with timeout
+	// 7. Establish connection with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
