@@ -51,13 +51,16 @@ type MeshHealthMetrics struct {
 	Uptime                   time.Duration
 	StartTime                time.Time
 	// Connection state diagnostics
-	ConnectionManagerLowWater  int
-	ConnectionManagerHighWater int
-	MeshPeerIDs                []string // List of peer IDs in mesh
-	ConnectedPeerIDs           []string // List of all connected peer IDs
-	RecentDisconnections       int      // Count of disconnections in last minute
-	LastDisconnectionTime      time.Time
-	PeerTagStatus              string // Summary of peer tagging status
+	ConnectionManagerLowWater         int
+	ConnectionManagerHighWater        int
+	MeshPeerIDs                       []string // List of peer IDs in mesh
+	ConnectedPeerIDs                  []string // List of all connected peer IDs
+	RecentDisconnections              int      // Count of disconnections in last minute
+	RecentDisconnectionsWeInitiated   int      // Count of disconnections we initiated
+	RecentDisconnectionsPeerInitiated int      // Count of disconnections peers initiated
+	LastDisconnectionTime             time.Time
+	LastDisconnectionDirection        string // "we_initiated" or "peer_initiated"
+	PeerTagStatus                     string // Summary of peer tagging status
 }
 
 // MeshLifecycleHook is a function type for mesh lifecycle event callbacks
@@ -83,7 +86,7 @@ type server struct {
 	meshLifecycleHooks []MeshLifecycleHook
 
 	// Connection state tracking
-	recentDisconnections []time.Time // Track disconnection timestamps for diagnostics
+	recentDisconnections []disconnectRecord // Track disconnection timestamps and direction for diagnostics
 	disconnectionsMu     sync.RWMutex
 }
 
@@ -109,7 +112,7 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 			StartTime: time.Now(),
 		},
 		meshLifecycleHooks:   make([]MeshLifecycleHook, 0),
-		recentDisconnections: make([]time.Time, 0),
+		recentDisconnections: make([]disconnectRecord, 0),
 	}
 
 	// Store server instance in deps for disconnection tracking
@@ -1021,16 +1024,29 @@ func (s *server) updateMeshMetrics(discoveryPeers, submissionPeers, totalConnect
 		}
 	}
 
-	// Count recent disconnections (within last minute)
+	// Count recent disconnections (within last minute) and track direction
 	s.disconnectionsMu.RLock()
 	recentDisconnects := 0
+	recentDisconnectsWeInitiated := 0
+	recentDisconnectsPeerInitiated := 0
 	var lastDisconnectTime time.Time
+	var lastDisconnectDirection string
 	oneMinuteAgo := time.Now().Add(-1 * time.Minute)
-	for _, disconnectTime := range s.recentDisconnections {
-		if disconnectTime.After(oneMinuteAgo) {
+	for _, record := range s.recentDisconnections {
+		if record.timestamp.After(oneMinuteAgo) {
 			recentDisconnects++
-			if disconnectTime.After(lastDisconnectTime) {
-				lastDisconnectTime = disconnectTime
+			if record.weInitiated {
+				recentDisconnectsWeInitiated++
+			} else {
+				recentDisconnectsPeerInitiated++
+			}
+			if record.timestamp.After(lastDisconnectTime) {
+				lastDisconnectTime = record.timestamp
+				if record.weInitiated {
+					lastDisconnectDirection = "we_initiated"
+				} else {
+					lastDisconnectDirection = "peer_initiated"
+				}
 			}
 		}
 	}
@@ -1067,7 +1083,10 @@ func (s *server) updateMeshMetrics(discoveryPeers, submissionPeers, totalConnect
 	s.meshMetrics.MeshPeerIDs = meshPeerIDs
 	s.meshMetrics.ConnectedPeerIDs = connectedPeerIDs
 	s.meshMetrics.RecentDisconnections = recentDisconnects
+	s.meshMetrics.RecentDisconnectionsWeInitiated = recentDisconnectsWeInitiated
+	s.meshMetrics.RecentDisconnectionsPeerInitiated = recentDisconnectsPeerInitiated
 	s.meshMetrics.LastDisconnectionTime = lastDisconnectTime
+	s.meshMetrics.LastDisconnectionDirection = lastDisconnectDirection
 	s.meshMetrics.PeerTagStatus = tagStatus
 
 	// Determine new state
@@ -1166,20 +1185,29 @@ func (s *server) GetMeshHealthMetrics() MeshHealthMetrics {
 	return s.meshMetrics
 }
 
+// disconnectRecord tracks a disconnection with direction
+type disconnectRecord struct {
+	timestamp   time.Time
+	weInitiated bool
+}
+
 // recordDisconnection tracks a disconnection event for diagnostics
-func (s *server) recordDisconnection() {
+func (s *server) recordDisconnection(weInitiated bool) {
 	s.disconnectionsMu.Lock()
 	defer s.disconnectionsMu.Unlock()
 
 	now := time.Now()
-	s.recentDisconnections = append(s.recentDisconnections, now)
+	s.recentDisconnections = append(s.recentDisconnections, disconnectRecord{
+		timestamp:   now,
+		weInitiated: weInitiated,
+	})
 
 	// Keep only disconnections from last 5 minutes
 	fiveMinutesAgo := now.Add(-5 * time.Minute)
-	validDisconnects := make([]time.Time, 0)
-	for _, disconnectTime := range s.recentDisconnections {
-		if disconnectTime.After(fiveMinutesAgo) {
-			validDisconnects = append(validDisconnects, disconnectTime)
+	validDisconnects := make([]disconnectRecord, 0)
+	for _, record := range s.recentDisconnections {
+		if record.timestamp.After(fiveMinutesAgo) {
+			validDisconnects = append(validDisconnects, record)
 		}
 	}
 	s.recentDisconnections = validDisconnects

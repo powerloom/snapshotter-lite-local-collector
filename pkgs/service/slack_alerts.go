@@ -15,13 +15,13 @@ var SlackAlertInstance *SlackAlertService
 
 // SlackAlertService handles sending alerts to Slack via webhook
 type SlackAlertService struct {
-	webhookURL        string
-	client            *http.Client
-	enabled           bool
-	lastAlertTime     time.Time
-	lastAlertState    MeshState
-	lastAlertEvent    string
-	alertThrottleMu   sync.RWMutex
+	webhookURL         string
+	client             *http.Client
+	enabled            bool
+	lastAlertTime      time.Time
+	lastAlertState     MeshState
+	lastAlertEvent     string
+	alertThrottleMu    sync.RWMutex
 	startupGracePeriod time.Duration
 }
 
@@ -65,7 +65,7 @@ func InitializeSlackAlerts(webhookURL string) {
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		enabled:           true,
+		enabled:            true,
 		startupGracePeriod: 5 * time.Minute, // Don't alert during first 5 minutes (startup period)
 	}
 	log.Info("Slack alerts initialized")
@@ -131,7 +131,7 @@ func (s *SlackAlertService) SendMeshAlert(event string, metrics MeshHealthMetric
 	} else {
 		lastDisconnectStr = "None"
 	}
-	
+
 	// Format peer IDs (truncate if too many)
 	meshPeerIDsStr := "None"
 	if len(metrics.MeshPeerIDs) > 0 {
@@ -141,7 +141,7 @@ func (s *SlackAlertService) SendMeshAlert(event string, metrics MeshHealthMetric
 			meshPeerIDsStr = fmt.Sprintf("%d peers (showing first 5): %v", len(metrics.MeshPeerIDs), metrics.MeshPeerIDs[:5])
 		}
 	}
-	
+
 	connectedPeerIDsStr := "None"
 	if len(metrics.ConnectedPeerIDs) > 0 {
 		if len(metrics.ConnectedPeerIDs) <= 5 {
@@ -164,8 +164,8 @@ func (s *SlackAlertService) SendMeshAlert(event string, metrics MeshHealthMetric
 		{Title: "Event", Value: event, Short: false},
 		// Connection state diagnostics
 		{Title: "Connection Manager", Value: fmt.Sprintf("LowWater: %d, HighWater: %d", metrics.ConnectionManagerLowWater, metrics.ConnectionManagerHighWater), Short: true},
-		{Title: "Recent Disconnections", Value: fmt.Sprintf("%d (last minute)", metrics.RecentDisconnections), Short: true},
-		{Title: "Last Disconnection", Value: lastDisconnectStr, Short: true},
+		{Title: "Recent Disconnections", Value: fmt.Sprintf("%d total (%d we initiated, %d peer initiated)", metrics.RecentDisconnections, metrics.RecentDisconnectionsWeInitiated, metrics.RecentDisconnectionsPeerInitiated), Short: false},
+		{Title: "Last Disconnection", Value: fmt.Sprintf("%s (%s)", lastDisconnectStr, metrics.LastDisconnectionDirection), Short: true},
 		{Title: "Peer Tag Status", Value: metrics.PeerTagStatus, Short: false},
 		{Title: "Mesh Peer IDs", Value: meshPeerIDsStr, Short: false},
 		{Title: "All Connected Peer IDs", Value: connectedPeerIDsStr, Short: false},
@@ -303,4 +303,3 @@ func (s *SlackAlertService) shouldSendAlert(event string, metrics MeshHealthMetr
 
 	return true
 }
-

@@ -188,15 +188,35 @@ func CreateLibP2pHost() error {
 		},
 		DisconnectedF: func(_ network.Network, conn network.Conn) {
 			totalConnections := len(P2PHost.Network().Peers())
-			log.Warnf("🔌 P2P peer disconnected: %s, Addr: %s, Remaining connections: %d",
-				conn.RemotePeer(), conn.RemoteMultiaddr(), totalConnections)
+
+			// Determine disconnect direction: who initiated the disconnect?
+			// If conn.Stat().Direction is Outbound, we initiated (outgoing connection)
+			// If Inbound, peer initiated (incoming connection)
+			disconnectDirection := "unknown"
+			weInitiated := false
+			if conn.Stat().Direction == network.DirOutbound {
+				disconnectDirection = "outbound (we initiated disconnect)"
+				weInitiated = true
+			} else if conn.Stat().Direction == network.DirInbound {
+				disconnectDirection = "inbound (peer initiated disconnect)"
+				weInitiated = false
+			}
+
+			log.Warnf("🔌 P2P peer disconnected: %s, Addr: %s, Direction: %s, Remaining connections: %d",
+				conn.RemotePeer(), conn.RemoteMultiaddr(), disconnectDirection, totalConnections)
+
 			// Log if this is a critical disconnection (mesh peer or last connection)
 			if totalConnections == 0 {
-				log.Error("🚨 CRITICAL: All connections lost! This may indicate connection manager pruning or network issue")
+				if weInitiated {
+					log.Error("🚨 CRITICAL: All connections lost! WE closed all connections - check for host.Close() or connection manager pruning")
+				} else {
+					log.Error("🚨 CRITICAL: All connections lost! PEERS disconnected from us - likely their connection manager pruning us or network issue")
+				}
 			}
+
 			// Track disconnection for diagnostics (used in Slack alerts)
 			if deps.serverInstance != nil {
-				deps.serverInstance.recordDisconnection()
+				deps.serverInstance.recordDisconnection(weInitiated)
 			}
 		},
 	})
