@@ -475,32 +475,57 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 	// Use epoch 0 for discovery/joining room, or current epoch for submissions
 	discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
 
-	// CRITICAL: Hold lock when reading topics to prevent race with recovery/initializeTopics()
-	// Recovery can re-join topics, so we need synchronization to avoid:
-	// 1. Reading nil topic pointer while recovery is re-joining
-	// 2. Using stale topic pointer after recovery replaces it
-	s.topicsMu.Lock()
-	if submission.Request.EpochId == 0 {
-		topicString = discoveryTopic
-		topic = s.discoveryTopic
-	} else {
-		// For now, use the "all" topic for all non-zero epochs
-		// This simplifies discovery and reduces topic proliferation
-		topicString = submissionsTopic
-		topic = s.submissionsTopic
+	// Retry mechanism: Wait for topic to be available during recovery
+	// This ensures submissions aren't lost during mesh recovery
+	maxRetries := 10
+	retryDelay := 100 * time.Millisecond
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		// CRITICAL: Hold lock when reading topics to prevent race with recovery/initializeTopics()
+		// Recovery can re-join topics, so we need synchronization to avoid:
+		// 1. Reading nil topic pointer while recovery is re-joining
+		// 2. Using stale topic pointer after recovery replaces it
+		s.topicsMu.Lock()
+		if submission.Request.EpochId == 0 {
+			topicString = discoveryTopic
+			topic = s.discoveryTopic
+		} else {
+			// For now, use the "all" topic for all non-zero epochs
+			// This simplifies discovery and reduces topic proliferation
+			topicString = submissionsTopic
+			topic = s.submissionsTopic
+		}
+
+		// Check if topic is nil while holding lock to prevent race with recovery
+		if topic == nil {
+			s.topicsMu.Unlock()
+			if attempt < maxRetries-1 {
+				// Topic not ready yet - wait and retry (recovery may be in progress)
+				log.Debugf("Topic %s not initialized yet, waiting for recovery (attempt %d/%d)...", topicString, attempt+1, maxRetries)
+				time.Sleep(retryDelay)
+				retryDelay *= 2 // Exponential backoff: 100ms, 200ms, 400ms, etc.
+				continue
+			} else {
+				// Max retries reached - log warning but don't skip
+				log.Warnf("Topic %s still not initialized after %d retries - recovery may be taking longer than expected", topicString, maxRetries)
+				// Continue anyway - we'll check again below and handle gracefully
+			}
+		} else {
+			// Topic is available - break out of retry loop
+			s.topicsMu.Unlock()
+			break
+		}
 	}
 
-	// Check if topic is nil while holding lock to prevent race with recovery
+	// Final check: if topic is still nil after retries, we can't proceed
+	// But this should be rare - recovery should complete quickly
 	if topic == nil {
-		s.topicsMu.Unlock()
-		log.Warnf("Topic %s not initialized yet, skipping broadcast (recovery may be in progress)", topicString)
+		log.Errorf("❌ Cannot broadcast to gossipsub: Topic %s not available after %d retries - submission may be lost", topicString, maxRetries)
 		return
 	}
 
-	// Note: We release the lock here because pubsub.Topic is thread-safe to use
+	// Note: We've verified topic is not nil. pubsub.Topic is thread-safe to use
 	// The topic pointer won't change (topics are only set if nil, never replaced)
-	// But we've verified it's not nil while holding the lock
-	s.topicsMu.Unlock()
 
 	// Check if we have peers on the topic
 	peersInTopic := s.pubsub.ListPeers(topicString)
