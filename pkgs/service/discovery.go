@@ -189,15 +189,24 @@ func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 		log.Info("No custom bootstrap nodes configured, using default bootstrap peers")
 		for _, peerAddr := range dht.DefaultBootstrapPeers {
 			peerinfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
+			if peerinfo == nil {
+				continue // Skip if parsing failed
+			}
 			wg.Add(1)
-			go func(pi *peer.AddrInfo) {
+			// CRITICAL: Pass *peerinfo (dereferenced value) to avoid closure bug
+			// Each goroutine gets its own copy of the peer.AddrInfo value
+			go func(pinfo peer.AddrInfo) {
 				defer wg.Done()
-				if err := host.Connect(ctx, *pi); err != nil {
-					log.Warning(err)
+				if err := host.Connect(ctx, pinfo); err != nil {
+					log.Warningf("Failed to connect to default bootstrap node %s: %v", pinfo.ID, err)
 				} else {
-					log.Debugln("Connection established with bootstrap node:", *pi)
+					log.Debugf("Connection established with default bootstrap node: %s", pinfo.ID)
+					// Protect bootstrap nodes from being pruned
+					if connMgr := host.ConnManager(); connMgr != nil {
+						connMgr.TagPeer(pinfo.ID, "bootstrap", 200) // Very high priority
+					}
 				}
-			}(peerinfo)
+			}(*peerinfo) // Dereference to pass value copy, not pointer
 		}
 	}
 	wg.Wait()
