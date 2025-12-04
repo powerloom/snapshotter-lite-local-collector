@@ -177,7 +177,7 @@ func CreateLibP2pHost() error {
 	P2PHost.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
 			totalConnections := len(P2PHost.Network().Peers())
-			log.Infof("🔌 P2P peer connected: %s, Addr: %s, Total connections: %d",
+			log.Debugf("🔌 P2P peer connected: %s, Addr: %s, Total connections: %d",
 				conn.RemotePeer(), conn.RemoteMultiaddr(), totalConnections)
 			// Tag all incoming connections to protect them from pruning
 			// This ensures peers that connect to us (not just ones we discover) are protected
@@ -189,34 +189,32 @@ func CreateLibP2pHost() error {
 		DisconnectedF: func(_ network.Network, conn network.Conn) {
 			totalConnections := len(P2PHost.Network().Peers())
 
-			// Determine disconnect direction: who initiated the disconnect?
-			// If conn.Stat().Direction is Outbound, we initiated (outgoing connection)
-			// If Inbound, peer initiated (incoming connection)
-			disconnectDirection := "unknown"
-			weInitiated := false
+			// NOTE: Direction tells us who INITIATED the connection, not who closed it
+			// DirOutbound = we dialed them (we initiated connection)
+			// DirInbound = they dialed us (peer initiated connection)
+			// We cannot determine who closed the connection from Direction alone
+			connectionDirection := "unknown"
+			weInitiatedConnection := false
 			if conn.Stat().Direction == network.DirOutbound {
-				disconnectDirection = "outbound (we initiated disconnect)"
-				weInitiated = true
+				connectionDirection = "outbound (we dialed them)"
+				weInitiatedConnection = true
 			} else if conn.Stat().Direction == network.DirInbound {
-				disconnectDirection = "inbound (peer initiated disconnect)"
-				weInitiated = false
+				connectionDirection = "inbound (they dialed us)"
+				weInitiatedConnection = false
 			}
 
-			log.Warnf("🔌 P2P peer disconnected: %s, Addr: %s, Direction: %s, Remaining connections: %d",
-				conn.RemotePeer(), conn.RemoteMultiaddr(), disconnectDirection, totalConnections)
+			log.Debugf("🔌 P2P peer disconnected: %s, Addr: %s, Connection was: %s, Remaining connections: %d",
+				conn.RemotePeer(), conn.RemoteMultiaddr(), connectionDirection, totalConnections)
 
 			// Log if this is a critical disconnection (mesh peer or last connection)
 			if totalConnections == 0 {
-				if weInitiated {
-					log.Error("🚨 CRITICAL: All connections lost! WE closed all connections - check for host.Close() or connection manager pruning")
-				} else {
-					log.Error("🚨 CRITICAL: All connections lost! PEERS disconnected from us - likely their connection manager pruning us or network issue")
-				}
+				log.Error("🚨 CRITICAL: All connections lost! Cannot determine who closed them from Direction alone - could be connection manager, network issue, or peer-initiated")
 			}
 
 			// Track disconnection for diagnostics (used in Slack alerts)
+			// Note: weInitiatedConnection means we initiated the CONNECTION, not the disconnect
 			if deps.serverInstance != nil {
-				deps.serverInstance.recordDisconnection(weInitiated)
+				deps.serverInstance.recordDisconnection(weInitiatedConnection)
 			}
 		},
 	})

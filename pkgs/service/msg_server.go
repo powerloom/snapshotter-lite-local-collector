@@ -51,16 +51,16 @@ type MeshHealthMetrics struct {
 	Uptime                   time.Duration
 	StartTime                time.Time
 	// Connection state diagnostics
-	ConnectionManagerLowWater         int
-	ConnectionManagerHighWater        int
-	MeshPeerIDs                       []string // List of peer IDs in mesh
-	ConnectedPeerIDs                  []string // List of all connected peer IDs
-	RecentDisconnections              int      // Count of disconnections in last minute
-	RecentDisconnectionsWeInitiated   int      // Count of disconnections we initiated
-	RecentDisconnectionsPeerInitiated int      // Count of disconnections peers initiated
-	LastDisconnectionTime             time.Time
-	LastDisconnectionDirection        string // "we_initiated" or "peer_initiated"
-	PeerTagStatus                     string // Summary of peer tagging status
+	ConnectionManagerLowWater                   int
+	ConnectionManagerHighWater                  int
+	MeshPeerIDs                                 []string // List of peer IDs in mesh
+	ConnectedPeerIDs                            []string // List of all connected peer IDs
+	RecentDisconnections                        int      // Count of disconnections in last minute
+	RecentDisconnectionsWeInitiatedConnection   int      // Count where we initiated the CONNECTION (not who closed it)
+	RecentDisconnectionsPeerInitiatedConnection int      // Count where peer initiated the CONNECTION (not who closed it)
+	LastDisconnectionTime                       time.Time
+	LastDisconnectionConnectionDirection        string // "we_initiated_connection" or "peer_initiated_connection" (NOT who closed it)
+	PeerTagStatus                               string // Summary of peer tagging status
 }
 
 // MeshLifecycleHook is a function type for mesh lifecycle event callbacks
@@ -1024,28 +1024,29 @@ func (s *server) updateMeshMetrics(discoveryPeers, submissionPeers, totalConnect
 		}
 	}
 
-	// Count recent disconnections (within last minute) and track direction
+	// Count recent disconnections (within last minute) and track connection direction
+	// NOTE: Direction indicates who INITIATED the connection, not who closed it
 	s.disconnectionsMu.RLock()
 	recentDisconnects := 0
-	recentDisconnectsWeInitiated := 0
-	recentDisconnectsPeerInitiated := 0
+	recentDisconnectsWeInitiatedConnection := 0
+	recentDisconnectsPeerInitiatedConnection := 0
 	var lastDisconnectTime time.Time
-	var lastDisconnectDirection string
+	var lastDisconnectConnectionDirection string
 	oneMinuteAgo := time.Now().Add(-1 * time.Minute)
 	for _, record := range s.recentDisconnections {
 		if record.timestamp.After(oneMinuteAgo) {
 			recentDisconnects++
 			if record.weInitiated {
-				recentDisconnectsWeInitiated++
+				recentDisconnectsWeInitiatedConnection++
 			} else {
-				recentDisconnectsPeerInitiated++
+				recentDisconnectsPeerInitiatedConnection++
 			}
 			if record.timestamp.After(lastDisconnectTime) {
 				lastDisconnectTime = record.timestamp
 				if record.weInitiated {
-					lastDisconnectDirection = "we_initiated"
+					lastDisconnectConnectionDirection = "we_initiated_connection"
 				} else {
-					lastDisconnectDirection = "peer_initiated"
+					lastDisconnectConnectionDirection = "peer_initiated_connection"
 				}
 			}
 		}
@@ -1083,10 +1084,10 @@ func (s *server) updateMeshMetrics(discoveryPeers, submissionPeers, totalConnect
 	s.meshMetrics.MeshPeerIDs = meshPeerIDs
 	s.meshMetrics.ConnectedPeerIDs = connectedPeerIDs
 	s.meshMetrics.RecentDisconnections = recentDisconnects
-	s.meshMetrics.RecentDisconnectionsWeInitiated = recentDisconnectsWeInitiated
-	s.meshMetrics.RecentDisconnectionsPeerInitiated = recentDisconnectsPeerInitiated
+	s.meshMetrics.RecentDisconnectionsWeInitiatedConnection = recentDisconnectsWeInitiatedConnection
+	s.meshMetrics.RecentDisconnectionsPeerInitiatedConnection = recentDisconnectsPeerInitiatedConnection
 	s.meshMetrics.LastDisconnectionTime = lastDisconnectTime
-	s.meshMetrics.LastDisconnectionDirection = lastDisconnectDirection
+	s.meshMetrics.LastDisconnectionConnectionDirection = lastDisconnectConnectionDirection
 	s.meshMetrics.PeerTagStatus = tagStatus
 
 	// Determine new state
@@ -1227,47 +1228,53 @@ func (s *server) monitorMeshStatus() {
 
 	lastRecoveryAttempt := time.Now()
 	lastDetailedLog := time.Now()
+	lastHourMarkCheck := time.Now()
 
 	for range ticker.C {
+		// CRITICAL: Log detailed state around 1-hour mark to diagnose mass disconnect
+		uptime := time.Since(s.meshMetrics.StartTime)
+		if uptime >= 55*time.Minute && uptime <= 65*time.Minute {
+			// Within 5 minutes of 1-hour mark - log detailed state every 30 seconds
+			if time.Since(lastHourMarkCheck) >= 30*time.Second {
+				allPeers := deps.hostConn.Network().Peers()
+				discoveryPeers := len(s.pubsub.ListPeers(discoveryTopic))
+				submissionPeers := len(s.pubsub.ListPeers(submissionsTopic))
+
+				log.WithFields(log.Fields{
+					"uptime_minutes":   int(uptime.Minutes()),
+					"uptime_seconds":   int(uptime.Seconds()),
+					"total_connected":  len(allPeers),
+					"discovery_peers":  discoveryPeers,
+					"submission_peers": submissionPeers,
+					"near_1_hour_mark": true,
+				}).Warn("⏰ Near 1-hour mark - monitoring for mass disconnect event")
+
+				lastHourMarkCheck = time.Now()
+			}
+		}
 		// Check peer counts for both topics
 		discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
 		discoveryPeers := len(s.pubsub.ListPeers(discoveryTopic))
 		submissionPeers := len(s.pubsub.ListPeers(submissionsTopic))
 		totalConnectedPeers := len(deps.hostConn.Network().Peers())
 
-		// CRITICAL: Periodically re-tag ALL connected peers to prevent connection manager from pruning them
-		// Peer tags may expire or get cleared, so we need to refresh them regularly
-		// This is essential because libp2p connection manager trims connections periodically,
-		// and untagged peers can be pruned even if they're in the mesh
+		// Periodically re-tag mesh peers to prevent our connection manager from pruning them
+		// Note: DSV nodes tag incoming connections on their side, so we don't need to tag all peers
+		// We only tag mesh peers to protect them from our own connection manager (LowWater=1, HighWater=1000)
 		if ConnManager != nil && deps.hostConn != nil {
-			allPeers := deps.hostConn.Network().Peers()
 			meshPeers := make(map[peer.ID]bool)
-			taggedCount := 0
 
-			// Collect all mesh peers (from both topics)
+			// Tag mesh peers from both topics - these are critical for gossipsub functionality
 			for _, peerID := range s.pubsub.ListPeers(discoveryTopic) {
 				meshPeers[peerID] = true
 				ConnManager.TagPeer(peerID, "topic-peer", 50) // Medium priority for mesh peers
-				taggedCount++
 			}
 			for _, peerID := range s.pubsub.ListPeers(submissionsTopic) {
 				if !meshPeers[peerID] {
 					meshPeers[peerID] = true
 					ConnManager.TagPeer(peerID, "topic-peer", 50) // Medium priority for mesh peers
-					taggedCount++
 				}
 			}
-
-			// Tag ALL other connected peers with lower priority to prevent aggressive pruning
-			// This ensures connection manager doesn't close connections that might join the mesh later
-			for _, peerID := range allPeers {
-				if !meshPeers[peerID] {
-					// Tag non-mesh peers with lower priority, but still protect them
-					ConnManager.TagPeer(peerID, "connected-peer", 25)
-					taggedCount++
-				}
-			}
-
 		}
 
 		// Update metrics and detect state transitions

@@ -164,8 +164,8 @@ func (s *SlackAlertService) SendMeshAlert(event string, metrics MeshHealthMetric
 		{Title: "Event", Value: event, Short: false},
 		// Connection state diagnostics
 		{Title: "Connection Manager", Value: fmt.Sprintf("LowWater: %d, HighWater: %d", metrics.ConnectionManagerLowWater, metrics.ConnectionManagerHighWater), Short: true},
-		{Title: "Recent Disconnections", Value: fmt.Sprintf("%d total (%d we initiated, %d peer initiated)", metrics.RecentDisconnections, metrics.RecentDisconnectionsWeInitiated, metrics.RecentDisconnectionsPeerInitiated), Short: false},
-		{Title: "Last Disconnection", Value: fmt.Sprintf("%s (%s)", lastDisconnectStr, metrics.LastDisconnectionDirection), Short: true},
+		{Title: "Recent Disconnections", Value: fmt.Sprintf("%d total (%d we-initiated-connection, %d peer-initiated-connection)\n⚠️ Direction shows who INITIATED connection, not who closed it", metrics.RecentDisconnections, metrics.RecentDisconnectionsWeInitiatedConnection, metrics.RecentDisconnectionsPeerInitiatedConnection), Short: false},
+		{Title: "Last Disconnection", Value: fmt.Sprintf("%s (%s)", lastDisconnectStr, metrics.LastDisconnectionConnectionDirection), Short: true},
 		{Title: "Peer Tag Status", Value: metrics.PeerTagStatus, Short: false},
 		{Title: "Mesh Peer IDs", Value: meshPeerIDsStr, Short: false},
 		{Title: "All Connected Peer IDs", Value: connectedPeerIDsStr, Short: false},
