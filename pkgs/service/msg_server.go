@@ -14,11 +14,13 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
+	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -473,7 +475,10 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 	// Use epoch 0 for discovery/joining room, or current epoch for submissions
 	discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
 
-	// Hold lock when reading topics to prevent race with initializeTopics()
+	// CRITICAL: Hold lock when reading topics to prevent race with recovery/initializeTopics()
+	// Recovery can re-join topics, so we need synchronization to avoid:
+	// 1. Reading nil topic pointer while recovery is re-joining
+	// 2. Using stale topic pointer after recovery replaces it
 	s.topicsMu.Lock()
 	if submission.Request.EpochId == 0 {
 		topicString = discoveryTopic
@@ -484,13 +489,18 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 		topicString = submissionsTopic
 		topic = s.submissionsTopic
 	}
-	s.topicsMu.Unlock()
 
-	// Skip if topics not initialized yet
+	// Check if topic is nil while holding lock to prevent race with recovery
 	if topic == nil {
-		log.Warnf("Topic %s not initialized yet, skipping broadcast", topicString)
+		s.topicsMu.Unlock()
+		log.Warnf("Topic %s not initialized yet, skipping broadcast (recovery may be in progress)", topicString)
 		return
 	}
+
+	// Note: We release the lock here because pubsub.Topic is thread-safe to use
+	// The topic pointer won't change (topics are only set if nil, never replaced)
+	// But we've verified it's not nil while holding the lock
+	s.topicsMu.Unlock()
 
 	// Check if we have peers on the topic
 	peersInTopic := s.pubsub.ListPeers(topicString)
@@ -603,6 +613,93 @@ func (s *server) quickDiscoverPeers() {
 				break
 			}
 		}
+	}
+}
+
+// reconnectToBootstrapNodes aggressively reconnects to bootstrap nodes when all connections are lost
+// This mimics how Ethereum/IPFS peers maintain connectivity - they always reconnect to bootstrap nodes
+func (s *server) reconnectToBootstrapNodes() {
+	if deps.hostConn == nil {
+		log.Warn("Cannot reconnect to bootstrap: host not initialized")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	connectedCount := 0
+
+	// Reconnect to custom bootstrap nodes if configured
+	if len(config.SettingsObj.BootstrapNodeAddrs) > 0 {
+		log.Infof("Reconnecting to %d custom bootstrap nodes...", len(config.SettingsObj.BootstrapNodeAddrs))
+		for i, bootstrapAddr := range config.SettingsObj.BootstrapNodeAddrs {
+			if bootstrapAddr == "" {
+				continue
+			}
+
+			peerMA, err := ma.NewMultiaddr(bootstrapAddr)
+			if err != nil {
+				log.Debugf("Invalid bootstrap multiaddr %d: %v", i+1, err)
+				continue
+			}
+
+			peerinfo, err := peer.AddrInfoFromP2pAddr(peerMA)
+			if err != nil {
+				log.Debugf("Failed to parse bootstrap peer %d: %v", i+1, err)
+				continue
+			}
+
+			// Skip if already connected
+			if deps.hostConn.Network().Connectedness(peerinfo.ID) == network.Connected {
+				connectedCount++
+				continue
+			}
+
+			// Try to reconnect
+			if err := deps.hostConn.Connect(ctx, *peerinfo); err != nil {
+				log.Debugf("Failed to reconnect to bootstrap node %d (%s): %v", i+1, peerinfo.ID, err)
+			} else {
+				connectedCount++
+				log.Infof("✅ Reconnected to bootstrap node %d: %s", i+1, peerinfo.ID)
+				// Tag bootstrap nodes for protection
+				if ConnManager != nil {
+					ConnManager.TagPeer(peerinfo.ID, "bootstrap", 200)
+				}
+			}
+		}
+	} else {
+		// Fallback to default bootstrap peers
+		log.Info("Reconnecting to default bootstrap peers...")
+		for _, peerAddr := range dht.DefaultBootstrapPeers {
+			peerinfo, err := peer.AddrInfoFromP2pAddr(peerAddr)
+			if err != nil {
+				continue
+			}
+
+			// Skip if already connected
+			if deps.hostConn.Network().Connectedness(peerinfo.ID) == network.Connected {
+				connectedCount++
+				continue
+			}
+
+			// Try to reconnect
+			if err := deps.hostConn.Connect(ctx, *peerinfo); err != nil {
+				log.Debugf("Failed to reconnect to default bootstrap node %s: %v", peerinfo.ID, err)
+			} else {
+				connectedCount++
+				log.Infof("✅ Reconnected to default bootstrap node: %s", peerinfo.ID)
+				// Tag bootstrap nodes for protection
+				if ConnManager != nil {
+					ConnManager.TagPeer(peerinfo.ID, "bootstrap", 200)
+				}
+			}
+		}
+	}
+
+	if connectedCount > 0 {
+		log.Infof("✅ Bootstrap reconnection: connected to %d bootstrap nodes", connectedCount)
+	} else {
+		log.Warn("⚠️ Failed to reconnect to any bootstrap nodes - network may be down")
 	}
 }
 
@@ -1325,6 +1422,13 @@ func (s *server) monitorMeshStatus() {
 				lastRecoveryAttempt = time.Now()
 
 				s.triggerMeshLifecycleHook("mesh_recovery_attempt", metrics)
+
+				// CRITICAL: When all connections are lost, aggressively reconnect to bootstrap nodes first
+				// This is how Ethereum/IPFS peers maintain connectivity - they always reconnect to bootstrap nodes
+				if totalConnectedPeers == 0 {
+					log.Warn("🚨 All connections lost - aggressively reconnecting to bootstrap nodes...")
+					s.reconnectToBootstrapNodes()
+				}
 
 				// Quick peer discovery
 				s.quickDiscoverPeers()
