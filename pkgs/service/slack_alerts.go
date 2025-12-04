@@ -124,6 +124,33 @@ func (s *SlackAlertService) SendMeshAlert(event string, metrics MeshHealthMetric
 	title := fmt.Sprintf("%s Gossipsub Mesh Alert: %s", emoji, event)
 	text := fmt.Sprintf("*State:* %s\n*Severity:* %s", metrics.State, severity)
 
+	// Format last disconnection time
+	var lastDisconnectStr string
+	if !metrics.LastDisconnectionTime.IsZero() {
+		lastDisconnectStr = metrics.LastDisconnectionTime.Format(time.RFC3339)
+	} else {
+		lastDisconnectStr = "None"
+	}
+	
+	// Format peer IDs (truncate if too many)
+	meshPeerIDsStr := "None"
+	if len(metrics.MeshPeerIDs) > 0 {
+		if len(metrics.MeshPeerIDs) <= 5 {
+			meshPeerIDsStr = fmt.Sprintf("%v", metrics.MeshPeerIDs)
+		} else {
+			meshPeerIDsStr = fmt.Sprintf("%d peers (showing first 5): %v", len(metrics.MeshPeerIDs), metrics.MeshPeerIDs[:5])
+		}
+	}
+	
+	connectedPeerIDsStr := "None"
+	if len(metrics.ConnectedPeerIDs) > 0 {
+		if len(metrics.ConnectedPeerIDs) <= 5 {
+			connectedPeerIDsStr = fmt.Sprintf("%v", metrics.ConnectedPeerIDs)
+		} else {
+			connectedPeerIDsStr = fmt.Sprintf("%d peers (showing first 5): %v", len(metrics.ConnectedPeerIDs), metrics.ConnectedPeerIDs[:5])
+		}
+	}
+
 	fields := []Field{
 		{Title: "Mesh State", Value: string(metrics.State), Short: true},
 		{Title: "Severity", Value: severity, Short: true},
@@ -135,6 +162,13 @@ func (s *SlackAlertService) SendMeshAlert(event string, metrics MeshHealthMetric
 		{Title: "Last Pruning", Value: lastPruningStr, Short: true},
 		{Title: "Uptime", Value: uptimeStr, Short: true},
 		{Title: "Event", Value: event, Short: false},
+		// Connection state diagnostics
+		{Title: "Connection Manager", Value: fmt.Sprintf("LowWater: %d, HighWater: %d", metrics.ConnectionManagerLowWater, metrics.ConnectionManagerHighWater), Short: true},
+		{Title: "Recent Disconnections", Value: fmt.Sprintf("%d (last minute)", metrics.RecentDisconnections), Short: true},
+		{Title: "Last Disconnection", Value: lastDisconnectStr, Short: true},
+		{Title: "Peer Tag Status", Value: metrics.PeerTagStatus, Short: false},
+		{Title: "Mesh Peer IDs", Value: meshPeerIDsStr, Short: false},
+		{Title: "All Connected Peer IDs", Value: connectedPeerIDsStr, Short: false},
 	}
 
 	attachment := Attachment{

@@ -18,12 +18,13 @@ import (
 )
 
 type ServiceDependencies struct {
-	hostConn    host.Host
-	sequencerID peer.ID
-	streamPool  *StreamPool
-	dht         *dht.IpfsDHT
-	initialized bool
-	mu          sync.RWMutex
+	hostConn       host.Host
+	sequencerID    peer.ID
+	streamPool     *StreamPool
+	dht            *dht.IpfsDHT
+	initialized    bool
+	serverInstance *server // Reference to server instance for disconnection tracking
+	mu             sync.RWMutex
 }
 
 var (
