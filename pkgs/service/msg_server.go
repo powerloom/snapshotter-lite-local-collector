@@ -472,6 +472,9 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 
 	// Use epoch 0 for discovery/joining room, or current epoch for submissions
 	discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
+
+	// Hold lock when reading topics to prevent race with initializeTopics()
+	s.topicsMu.Lock()
 	if submission.Request.EpochId == 0 {
 		topicString = discoveryTopic
 		topic = s.discoveryTopic
@@ -481,6 +484,7 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 		topicString = submissionsTopic
 		topic = s.submissionsTopic
 	}
+	s.topicsMu.Unlock()
 
 	// Skip if topics not initialized yet
 	if topic == nil {
@@ -615,7 +619,9 @@ func (s *server) initializeTopics() {
 		log.Errorf("Failed to join discovery topic: %v", err)
 		return
 	}
+	s.topicsMu.Lock()
 	s.discoveryTopic = topic
+	s.topicsMu.Unlock()
 
 	// Subscribe to discovery topic to be a proper participant
 	discoverySub, err := topic.Subscribe()
@@ -669,7 +675,9 @@ func (s *server) initializeTopics() {
 		log.Errorf("Failed to join submissions topic: %v", err)
 		return
 	}
+	s.topicsMu.Lock()
 	s.submissionsTopic = topic
+	s.topicsMu.Unlock()
 
 	// Subscribe to the topic to be a proper gossipsub participant
 	submissionsSub, err := topic.Subscribe()
@@ -933,7 +941,12 @@ func (s *server) publishHeartbeats() {
 
 		// Type 1: Lightweight heartbeat for discovery topic (/0)
 		// Uses nil submissions so DSV node skips it immediately (line 731 in unified/main.go)
-		if s.discoveryTopic != nil {
+		// Hold lock when reading topic to prevent race with initializeTopics()
+		s.topicsMu.Lock()
+		discoveryTopicPtr := s.discoveryTopic
+		s.topicsMu.Unlock()
+
+		if discoveryTopicPtr != nil {
 			discoveryHeartbeat := &P2PSnapshotSubmission{
 				EpochID:       0,   // Epoch 0 for discovery topic
 				Submissions:   nil, // Nil so DSV recognizes as heartbeat and skips queueing
@@ -945,7 +958,7 @@ func (s *server) publishHeartbeats() {
 			if err != nil {
 				log.Debugf("Failed to marshal discovery heartbeat: %v", err)
 			} else {
-				if err := s.discoveryTopic.Publish(context.Background(), discoveryBytes); err != nil {
+				if err := discoveryTopicPtr.Publish(context.Background(), discoveryBytes); err != nil {
 					log.Debugf("Failed to publish heartbeat to discovery: %v", err)
 				} else {
 					peersCount := len(s.pubsub.ListPeers(discoveryTopic))
@@ -958,7 +971,12 @@ func (s *server) publishHeartbeats() {
 
 		// Type 2: Test submission for submissions topic (/all)
 		// Uses empty SnapshotCid so DSV recognizes as heartbeat but still helps mesh formation
-		if s.submissionsTopic != nil {
+		// Hold lock when reading topic to prevent race with initializeTopics()
+		s.topicsMu.Lock()
+		submissionsTopicPtr := s.submissionsTopic
+		s.topicsMu.Unlock()
+
+		if submissionsTopicPtr != nil {
 			testSubmission := &pkgs.SnapshotSubmission{
 				Request: &pkgs.Request{
 					EpochId:     0, // Epoch 0 but will go to submissions topic
@@ -978,7 +996,7 @@ func (s *server) publishHeartbeats() {
 			if err != nil {
 				log.Debugf("Failed to marshal submissions heartbeat: %v", err)
 			} else {
-				if err := s.submissionsTopic.Publish(context.Background(), submissionsBytes); err != nil {
+				if err := submissionsTopicPtr.Publish(context.Background(), submissionsBytes); err != nil {
 					log.Debugf("Failed to publish test submission to submissions: %v", err)
 				} else {
 					peersCount := len(s.pubsub.ListPeers(submissionsTopic))
