@@ -32,6 +32,8 @@ var (
 	TcpAddr              ma.Multiaddr
 	rm                   network.ResourceManager
 	connectionRefreshing atomic.Bool
+	lastAllConnLostLog   time.Time // Throttle "all connections lost" error logs
+	allConnLostLogMu     sync.Mutex
 )
 
 // Thread-safe getter for connection state
@@ -207,8 +209,18 @@ func CreateLibP2pHost() error {
 				conn.RemotePeer(), conn.RemoteMultiaddr(), connectionDirection, totalConnections)
 
 			// Log if this is a critical disconnection (mesh peer or last connection)
+			// Throttle logging to prevent spam when multiple connections disconnect simultaneously
 			if totalConnections == 0 {
-				log.Error("🚨 CRITICAL: All connections lost! Cannot determine who closed them from Direction alone - could be connection manager, network issue, or peer-initiated")
+				allConnLostLogMu.Lock()
+				shouldLog := time.Since(lastAllConnLostLog) > 1*time.Minute
+				if shouldLog {
+					lastAllConnLostLog = time.Now()
+					allConnLostLogMu.Unlock()
+					log.Error("🚨 CRITICAL: All connections lost! Cannot determine who closed them from Direction alone - could be connection manager, network issue, or peer-initiated")
+				} else {
+					allConnLostLogMu.Unlock()
+					log.Debugf("All connections lost (throttled log - last logged %v ago)", time.Since(lastAllConnLostLog))
+				}
 			}
 
 			// Track disconnection for diagnostics (used in Slack alerts)
