@@ -77,21 +77,25 @@ func CreateLibP2pHost() error {
 	TcpAddr, _ = ma.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", config.SettingsObj.LocalCollectorP2PPort))
 
 	// Use configurable connection manager limits (defaults match DSV nodes: 1000/4000)
-	// Lower limits help prune random IPFS peers and keep only DSV nodes
+	// CRITICAL: Use very permissive limits to prevent aggressive pruning
+	// LowWater=1 means we'll never prune when we have at least 1 connection
+	// HighWater=1000 means we'll only prune if we somehow get 1000+ connections
+	// This prevents the connection manager from closing connections when we have few peers
+	// The exact 1-hour pruning issue suggests connection manager is being too aggressive
 	connLowWater := config.SettingsObj.ConnManagerLowWater
 	connHighWater := config.SettingsObj.ConnManagerHighWater
 	if connLowWater == 0 {
-		connLowWater = 1000 // Default if not configured
+		connLowWater = 1 // Very low default - never prune when we have at least 1 connection
 	}
 	if connHighWater == 0 {
-		connHighWater = 4000 // Default if not configured
+		connHighWater = 1000 // High default - only prune if we get 1000+ connections
 	}
 
 	ConnManager, _ = connmgr.NewConnManager(
 		connLowWater,
 		connHighWater,
 		connmgr.WithGracePeriod(1*time.Minute))
-	log.Infof("Connection manager configured: LowWater=%d, HighWater=%d", connLowWater, connHighWater)
+	log.Infof("Connection manager configured: LowWater=%d, HighWater=%d (permissive mode to prevent 1-hour pruning)", connLowWater, connHighWater)
 
 	scalingLimits := rcmgr.DefaultLimits
 
@@ -172,15 +176,28 @@ func CreateLibP2pHost() error {
 
 	P2PHost.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
-			log.Debugf("P2P peer connected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
+			totalConnections := len(P2PHost.Network().Peers())
+			log.Infof("🔌 P2P peer connected: %s, Addr: %s, Total connections: %d",
+				conn.RemotePeer(), conn.RemoteMultiaddr(), totalConnections)
 			// Tag all incoming connections to protect them from pruning
 			// This ensures peers that connect to us (not just ones we discover) are protected
 			if ConnManager != nil {
 				ConnManager.TagPeer(conn.RemotePeer(), "inbound-peer", 25) // Low priority but still protected
+				log.Debugf("Tagged peer %s with 'inbound-peer' tag", conn.RemotePeer())
 			}
 		},
 		DisconnectedF: func(_ network.Network, conn network.Conn) {
-			log.Debugf("P2P peer disconnected: %s, Addr: %s", conn.RemotePeer(), conn.RemoteMultiaddr())
+			totalConnections := len(P2PHost.Network().Peers())
+			log.Warnf("🔌 P2P peer disconnected: %s, Addr: %s, Remaining connections: %d",
+				conn.RemotePeer(), conn.RemoteMultiaddr(), totalConnections)
+			// Log if this is a critical disconnection (mesh peer or last connection)
+			if totalConnections == 0 {
+				log.Error("🚨 CRITICAL: All connections lost! This may indicate connection manager pruning or network issue")
+			}
+			// Track disconnection for diagnostics (used in Slack alerts)
+			if deps.serverInstance != nil {
+				deps.serverInstance.recordDisconnection()
+			}
 		},
 	})
 

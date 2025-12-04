@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
 	log "github.com/sirupsen/logrus"
@@ -49,6 +50,14 @@ type MeshHealthMetrics struct {
 	LastPruningTime          time.Time
 	Uptime                   time.Duration
 	StartTime                time.Time
+	// Connection state diagnostics
+	ConnectionManagerLowWater  int
+	ConnectionManagerHighWater int
+	MeshPeerIDs                []string // List of peer IDs in mesh
+	ConnectedPeerIDs           []string // List of all connected peer IDs
+	RecentDisconnections       int      // Count of disconnections in last minute
+	LastDisconnectionTime      time.Time
+	PeerTagStatus              string // Summary of peer tagging status
 }
 
 // MeshLifecycleHook is a function type for mesh lifecycle event callbacks
@@ -72,6 +81,10 @@ type server struct {
 	meshMetrics        MeshHealthMetrics
 	meshMetricsMu      sync.RWMutex
 	meshLifecycleHooks []MeshLifecycleHook
+
+	// Connection state tracking
+	recentDisconnections []time.Time // Track disconnection timestamps for diagnostics
+	disconnectionsMu     sync.RWMutex
 }
 
 var _ pkgs.SubmissionServer = &server{}
@@ -95,8 +108,14 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 			State:     MeshStatePruned, // Start as pruned until mesh is actually checked
 			StartTime: time.Now(),
 		},
-		meshLifecycleHooks: make([]MeshLifecycleHook, 0),
+		meshLifecycleHooks:   make([]MeshLifecycleHook, 0),
+		recentDisconnections: make([]time.Time, 0),
 	}
+
+	// Store server instance in deps for disconnection tracking
+	deps.mu.Lock()
+	deps.serverInstance = server
+	deps.mu.Unlock()
 
 	// Initialize the two-level topic architecture
 	go server.initializeTopics()
@@ -978,11 +997,78 @@ func (s *server) updateMeshMetrics(discoveryPeers, submissionPeers, totalConnect
 	oldDiscoveryPeers := s.meshMetrics.DiscoveryPeerCount
 	oldSubmissionPeers := s.meshMetrics.SubmissionsPeerCount
 
+	// Collect connection state diagnostics
+	discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
+	meshPeerSet := make(map[peer.ID]bool)
+	var meshPeerIDs []string
+	var connectedPeerIDs []string
+
+	if s.pubsub != nil && deps.hostConn != nil {
+		// Get mesh peers
+		for _, pid := range s.pubsub.ListPeers(discoveryTopic) {
+			meshPeerSet[pid] = true
+			meshPeerIDs = append(meshPeerIDs, pid.String())
+		}
+		for _, pid := range s.pubsub.ListPeers(submissionsTopic) {
+			if !meshPeerSet[pid] {
+				meshPeerIDs = append(meshPeerIDs, pid.String())
+			}
+		}
+
+		// Get all connected peers
+		for _, pid := range deps.hostConn.Network().Peers() {
+			connectedPeerIDs = append(connectedPeerIDs, pid.String())
+		}
+	}
+
+	// Count recent disconnections (within last minute)
+	s.disconnectionsMu.RLock()
+	recentDisconnects := 0
+	var lastDisconnectTime time.Time
+	oneMinuteAgo := time.Now().Add(-1 * time.Minute)
+	for _, disconnectTime := range s.recentDisconnections {
+		if disconnectTime.After(oneMinuteAgo) {
+			recentDisconnects++
+			if disconnectTime.After(lastDisconnectTime) {
+				lastDisconnectTime = disconnectTime
+			}
+		}
+	}
+	s.disconnectionsMu.RUnlock()
+
+	// Get connection manager state
+	connLowWater := 0
+	connHighWater := 0
+	if ConnManager != nil {
+		// Connection manager doesn't expose these directly, so we'll get from config
+		connLowWater = config.SettingsObj.ConnManagerLowWater
+		connHighWater = config.SettingsObj.ConnManagerHighWater
+		if connLowWater == 0 {
+			connLowWater = 1 // Default
+		}
+		if connHighWater == 0 {
+			connHighWater = 1000 // Default
+		}
+	}
+
+	// Build peer tag status summary
+	tagStatus := fmt.Sprintf("Mesh: %d tagged, Total: %d connected", len(meshPeerIDs), len(connectedPeerIDs))
+	if len(meshPeerIDs) > 0 && len(connectedPeerIDs) > len(meshPeerIDs) {
+		tagStatus += fmt.Sprintf(" (%d untagged)", len(connectedPeerIDs)-len(meshPeerIDs))
+	}
+
 	// Update metrics
 	s.meshMetrics.DiscoveryPeerCount = discoveryPeers
 	s.meshMetrics.SubmissionsPeerCount = submissionPeers
 	s.meshMetrics.TotalConnectedPeers = totalConnectedPeers
 	s.meshMetrics.Uptime = time.Since(s.meshMetrics.StartTime)
+	s.meshMetrics.ConnectionManagerLowWater = connLowWater
+	s.meshMetrics.ConnectionManagerHighWater = connHighWater
+	s.meshMetrics.MeshPeerIDs = meshPeerIDs
+	s.meshMetrics.ConnectedPeerIDs = connectedPeerIDs
+	s.meshMetrics.RecentDisconnections = recentDisconnects
+	s.meshMetrics.LastDisconnectionTime = lastDisconnectTime
+	s.meshMetrics.PeerTagStatus = tagStatus
 
 	// Determine new state
 	var newState MeshState
@@ -1080,6 +1166,25 @@ func (s *server) GetMeshHealthMetrics() MeshHealthMetrics {
 	return s.meshMetrics
 }
 
+// recordDisconnection tracks a disconnection event for diagnostics
+func (s *server) recordDisconnection() {
+	s.disconnectionsMu.Lock()
+	defer s.disconnectionsMu.Unlock()
+
+	now := time.Now()
+	s.recentDisconnections = append(s.recentDisconnections, now)
+
+	// Keep only disconnections from last 5 minutes
+	fiveMinutesAgo := now.Add(-5 * time.Minute)
+	validDisconnects := make([]time.Time, 0)
+	for _, disconnectTime := range s.recentDisconnections {
+		if disconnectTime.After(fiveMinutesAgo) {
+			validDisconnects = append(validDisconnects, disconnectTime)
+		}
+	}
+	s.recentDisconnections = validDisconnects
+}
+
 // monitorMeshStatus periodically checks mesh membership and recovers from pruning
 func (s *server) monitorMeshStatus() {
 	// Do an immediate check on startup to set initial state correctly
@@ -1102,23 +1207,51 @@ func (s *server) monitorMeshStatus() {
 		submissionPeers := len(s.pubsub.ListPeers(submissionsTopic))
 		totalConnectedPeers := len(deps.hostConn.Network().Peers())
 
-		// CRITICAL: Periodically re-tag all mesh peers to prevent connection manager from pruning them
+		// CRITICAL: Periodically re-tag ALL connected peers to prevent connection manager from pruning them
 		// Peer tags may expire or get cleared, so we need to refresh them regularly
-		if ConnManager != nil {
-			// Re-tag all peers in the discovery topic mesh
+		// This is essential because libp2p connection manager trims connections periodically,
+		// and untagged peers can be pruned even if they're in the mesh
+		if ConnManager != nil && deps.hostConn != nil {
+			allPeers := deps.hostConn.Network().Peers()
+			meshPeers := make(map[peer.ID]bool)
+			taggedCount := 0
+
+			// Collect all mesh peers (from both topics)
 			for _, peerID := range s.pubsub.ListPeers(discoveryTopic) {
-				ConnManager.TagPeer(peerID, "topic-peer", 50)
+				meshPeers[peerID] = true
+				ConnManager.TagPeer(peerID, "topic-peer", 50) // Medium priority for mesh peers
+				taggedCount++
 			}
-			// Re-tag all peers in the submissions topic mesh
 			for _, peerID := range s.pubsub.ListPeers(submissionsTopic) {
-				ConnManager.TagPeer(peerID, "topic-peer", 50)
+				if !meshPeers[peerID] {
+					meshPeers[peerID] = true
+					ConnManager.TagPeer(peerID, "topic-peer", 50) // Medium priority for mesh peers
+					taggedCount++
+				}
 			}
+
+			// Tag ALL other connected peers with lower priority to prevent aggressive pruning
+			// This ensures connection manager doesn't close connections that might join the mesh later
+			for _, peerID := range allPeers {
+				if !meshPeers[peerID] {
+					// Tag non-mesh peers with lower priority, but still protect them
+					ConnManager.TagPeer(peerID, "connected-peer", 25)
+					taggedCount++
+				}
+			}
+
 		}
 
 		// Update metrics and detect state transitions
 		s.updateMeshMetrics(discoveryPeers, submissionPeers, totalConnectedPeers)
 
 		metrics := s.GetMeshHealthMetrics()
+
+		// Log periodically to diagnose tag refresh behavior (every 12 iterations = 1 minute)
+		if ConnManager != nil && deps.hostConn != nil && metrics.ConsecutiveLowPeerCounts%12 == 0 && totalConnectedPeers > 0 {
+			log.Debugf("Peer tag refresh: %d total peers, mesh peers: %d discovery + %d submissions",
+				totalConnectedPeers, discoveryPeers, submissionPeers)
+		}
 
 		// CRITICAL: Detect and recover from pruning
 		if discoveryPeers == 0 || submissionPeers == 0 {
