@@ -96,11 +96,32 @@ func AddPeerConnection(ctx context.Context, host host.Host, relayerAddr string) 
 	stableRelayerMA, err := ma.NewMultiaddr(relayerAddr)
 	if err != nil {
 		log.Debugln("Failed to parse stable peer multiaddress: ", err)
+		return false
+	}
+
+	// Filter out RFC1918 private IP addresses (Hetzner requirement)
+	if HasRFC1918Address(stableRelayerMA) {
+		log.Debugf("Skipping RFC1918 private IP address: %s", relayerAddr)
+		return false
 	}
 
 	peerInfo, err := peer.AddrInfoFromP2pAddr(stableRelayerMA)
 	if err != nil {
 		log.Debugln("Failed to extract peer info from multiaddress:", err)
+		return false
+	}
+
+	// Filter peer addresses to remove RFC1918 IPs
+	if len(peerInfo.Addrs) > 0 {
+		filteredAddrs, filteredCount := FilterRFC1918Multiaddrs(peerInfo.Addrs)
+		if filteredCount > 0 {
+			log.Debugf("Filtered %d RFC1918 addresses from peer %s", filteredCount, peerInfo.ID)
+		}
+		if len(filteredAddrs) == 0 {
+			log.Debugf("All addresses for peer %s are RFC1918, skipping connection", peerInfo.ID)
+			return false
+		}
+		peerInfo.Addrs = filteredAddrs
 	}
 
 	if host.Network().Connectedness(peerInfo.ID) == network.Connected {
@@ -162,11 +183,30 @@ func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 				continue
 			}
 
+			// Filter out RFC1918 private IP addresses (Hetzner requirement)
+			if HasRFC1918Address(peerMA) {
+				log.Warnf("Skipping bootstrap node %d with RFC1918 private IP: %s", i+1, bootstrapAddr)
+				continue
+			}
+
 			peerinfo, err := peer.AddrInfoFromP2pAddr(peerMA)
 			if err != nil {
 				log.Warnf("Failed to parse custom bootstrap peer info %d (%s): %v - skipping", i+1, bootstrapAddr, err)
 				log.Warnf("This may be due to peer ID format incompatibility. Continuing with other bootstrap nodes...")
 				continue
+			}
+
+			// Filter peer addresses to remove RFC1918 IPs
+			if len(peerinfo.Addrs) > 0 {
+				filteredAddrs, filteredCount := FilterRFC1918Multiaddrs(peerinfo.Addrs)
+				if filteredCount > 0 {
+					log.Debugf("Filtered %d RFC1918 addresses from bootstrap node %d", filteredCount, i+1)
+				}
+				if len(filteredAddrs) == 0 {
+					log.Warnf("All addresses for bootstrap node %d are RFC1918, skipping", i+1)
+					continue
+				}
+				peerinfo.Addrs = filteredAddrs
 			}
 
 			wg.Add(1)
@@ -188,9 +228,33 @@ func ConfigureDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 		// Fallback to default bootstrap peers if no custom nodes configured
 		log.Info("No custom bootstrap nodes configured, using default bootstrap peers")
 		for _, peerAddr := range dht.DefaultBootstrapPeers {
+			peerMA, err := ma.NewMultiaddr(peerAddr.String())
+			if err != nil {
+				continue // Skip if parsing failed
+			}
+
+			// Filter out RFC1918 private IP addresses (Hetzner requirement)
+			if HasRFC1918Address(peerMA) {
+				log.Debugf("Skipping default bootstrap peer with RFC1918 private IP: %s", peerAddr)
+				continue
+			}
+
 			peerinfo, _ := peer.AddrInfoFromP2pAddr(peerAddr)
 			if peerinfo == nil {
 				continue // Skip if parsing failed
+			}
+
+			// Filter peer addresses to remove RFC1918 IPs
+			if len(peerinfo.Addrs) > 0 {
+				filteredAddrs, filteredCount := FilterRFC1918Multiaddrs(peerinfo.Addrs)
+				if filteredCount > 0 {
+					log.Debugf("Filtered %d RFC1918 addresses from default bootstrap peer", filteredCount)
+				}
+				if len(filteredAddrs) == 0 {
+					log.Debugf("All addresses for default bootstrap peer are RFC1918, skipping")
+					continue
+				}
+				peerinfo.Addrs = filteredAddrs
 			}
 			wg.Add(1)
 			// CRITICAL: Pass *peerinfo (dereferenced value) to avoid closure bug
