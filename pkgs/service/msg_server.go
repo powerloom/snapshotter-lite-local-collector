@@ -104,8 +104,20 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 	}
 	deps.mu.RUnlock()
 
+	// Ensure write semaphore capacity matches stream pool size
+	maxConcurrentWrites := config.SettingsObj.MaxConcurrentWrites
+	maxStreamPoolSize := config.SettingsObj.MaxStreamPoolSize
+	if maxConcurrentWrites > maxStreamPoolSize {
+		log.Warnf("MAX_CONCURRENT_WRITES (%d) > MAX_STREAM_POOL_SIZE (%d), capping to pool size to prevent deadlocks",
+			maxConcurrentWrites, maxStreamPoolSize)
+		maxConcurrentWrites = maxStreamPoolSize
+	}
+	
+	log.Infof("Initializing write semaphore with capacity %d (stream pool size: %d)", 
+		maxConcurrentWrites, maxStreamPoolSize)
+	
 	server := &server{
-		writeSemaphore: make(chan struct{}, config.SettingsObj.MaxConcurrentWrites),
+		writeSemaphore: make(chan struct{}, maxConcurrentWrites),
 		metrics:        &sync.Map{},
 		pubsub:         gossiper,
 		joinedTopics:   make(map[string]*pubsub.Topic),

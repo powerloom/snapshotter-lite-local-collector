@@ -62,6 +62,15 @@ func InitLibp2pStreamPool(maxSize int) error {
 	libp2pStreamPoolMu.Lock()
 	defer libp2pStreamPoolMu.Unlock()
 
+	// Clean up any existing pool first (handles restart scenarios)
+	if libp2pStreamPool != nil {
+		log.Warn("Cleaning up existing stream pool before reinitialization")
+		libp2pStreamPool.Stop()
+		libp2pStreamPool = nil
+		// Give TCP buffers time to drain
+		time.Sleep(2 * time.Second)
+	}
+
 	// Verify connection state
 	_, seqId, err := GetSequencerConnection()
 	if err != nil {
@@ -75,7 +84,9 @@ func InitLibp2pStreamPool(maxSize int) error {
 		reqQueue:    make(chan *reqSlot, config.SettingsObj.MaxStreamQueueSize),
 	}
 
-	// Pre-fill the pool with streams
+	// Pre-fill the pool with streams (with staggered creation to avoid TCP buffer buildup)
+	log.Infof("Pre-filling stream pool (%d streams)...", maxSize)
+	created := 0
 	for i := 0; i < maxSize; i++ {
 		stream, err := pool.createNewStreamWithRetry()
 		if err != nil {
@@ -83,11 +94,23 @@ func InitLibp2pStreamPool(maxSize int) error {
 			continue
 		}
 		pool.streams = append(pool.streams, stream)
+		created++
+		
+		// Stagger stream creation to avoid TCP buffer buildup after restart
+		// Only add delay every 10 streams to balance startup time vs buffer pressure
+		if (i+1)%10 == 0 && i < maxSize-1 {
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
 
 	libp2pStreamPool = pool
 	log.Infof("Stream pool initialized with %d/%d streams for sequencer: %s",
-		len(pool.streams), maxSize, seqId.String())
+		created, maxSize, seqId.String())
+	
+	if created < maxSize {
+		log.Warnf("Stream pool only filled %d/%d streams - some may be created on-demand", created, maxSize)
+	}
+	
 	return nil
 }
 

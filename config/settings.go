@@ -95,7 +95,15 @@ func LoadConfig() {
 	config.StreamHealthCheckTimeout = time.Duration(getEnvAsInt("STREAM_HEALTH_CHECK_TIMEOUT_MS", 5000)) * time.Millisecond
 	config.StreamWriteTimeout = time.Duration(getEnvAsInt("STREAM_WRITE_TIMEOUT_MS", 5000)) * time.Millisecond
 	config.MaxWriteRetries = getEnvAsInt("MAX_WRITE_RETRIES", 5)
-	config.MaxConcurrentWrites = getEnvAsInt("MAX_CONCURRENT_WRITES", 100)
+	// MaxConcurrentWrites defaults to MaxStreamPoolSize if not explicitly set
+	// This ensures write capacity matches available streams
+	if os.Getenv("MAX_CONCURRENT_WRITES") == "" {
+		// Not set, default to stream pool size
+		config.MaxConcurrentWrites = config.MaxStreamPoolSize
+		log.Infof("MAX_CONCURRENT_WRITES not set, defaulting to MAX_STREAM_POOL_SIZE (%d)", config.MaxConcurrentWrites)
+	} else {
+		config.MaxConcurrentWrites = getEnvAsInt("MAX_CONCURRENT_WRITES", config.MaxStreamPoolSize)
+	}
 	config.MaxStreamQueueSize = getEnvAsInt("MAX_STREAM_QUEUE_SIZE", 1000)
 	config.WorkerPoolSize = getEnvAsInt("WORKER_POOL_SIZE", 250)
 
