@@ -264,15 +264,26 @@ func (p *StreamPool) ReleaseStream(sw *streamWithSlot, failed bool) {
 // InvalidateStreamsForConnection invalidates all streams on a given connection
 // Called when connection closes to immediately mark streams as dead
 func (p *StreamPool) InvalidateStreamsForConnection(conn network.Conn) {
+	if conn == nil {
+		return
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	invalidatedCount := 0
+	targetPeerID := conn.RemotePeer()
 
-	// Invalidate streams in pool
+	// Invalidate streams in pool - check by peer ID since Conn() may be nil after close
 	for i := len(p.streams) - 1; i >= 0; i-- {
 		stream := p.streams[i]
-		if stream.Conn() == conn {
+		streamConn := stream.Conn()
+		if streamConn != nil && streamConn.RemotePeer() == targetPeerID {
+			stream.Close()
+			p.streams = append(p.streams[:i], p.streams[i+1:]...)
+			invalidatedCount++
+		} else if streamConn == nil {
+			// Stream already has nil connection, remove it
 			stream.Close()
 			p.streams = append(p.streams[:i], p.streams[i+1:]...)
 			invalidatedCount++
@@ -281,14 +292,19 @@ func (p *StreamPool) InvalidateStreamsForConnection(conn network.Conn) {
 
 	// Invalidate checked-out streams (they'll be detected on next use)
 	for stream := range p.checkedOutStreams {
-		if stream.Conn() == conn {
+		streamConn := stream.Conn()
+		if streamConn != nil && streamConn.RemotePeer() == targetPeerID {
 			stream.Reset() // Force reset to fail any pending writes
+			invalidatedCount++
+		} else if streamConn == nil {
+			// Stream already has nil connection, reset it
+			stream.Reset()
 			invalidatedCount++
 		}
 	}
 
 	if invalidatedCount > 0 {
-		log.Warnf("Invalidated %d streams due to connection close (peer: %s)", invalidatedCount, conn.RemotePeer())
+		log.Warnf("Invalidated %d streams due to connection close (peer: %s)", invalidatedCount, targetPeerID)
 	}
 }
 

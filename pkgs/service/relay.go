@@ -397,9 +397,15 @@ func StartConnectionRefreshLoop(ctx context.Context) {
 			}
 			log.Info("✅ New connection established successfully")
 
+			// Small delay to ensure connection is fully established before rebuilding pool
+			time.Sleep(500 * time.Millisecond)
+
 			log.Info("🏊 Rebuilding stream pool")
 			if err := RebuildStreamPool(); err != nil {
 				log.Errorf("❌ Failed to rebuild stream pool: %v", err)
+				// Don't continue - connection refresh failed, streams will be created on-demand
+				connectionRefreshing.Store(false)
+				continue
 			}
 
 			connectionRefreshing.Store(false)
