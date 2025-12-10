@@ -3,6 +3,10 @@ package service
 import (
 	"net"
 
+	"github.com/libp2p/go-libp2p/core/connmgr"
+	"github.com/libp2p/go-libp2p/core/control"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 )
@@ -89,3 +93,55 @@ func HasRFC1918Address(addr ma.Multiaddr) bool {
 
 	return IsRFC1918(ip)
 }
+
+// RFC1918ConnectionGater blocks connections to RFC1918 private IP addresses
+// This is required by Hetzner to prevent scanning of internal networks
+type RFC1918ConnectionGater struct{}
+
+// InterceptPeerDial blocks dialing to peers with RFC1918 addresses
+func (g *RFC1918ConnectionGater) InterceptPeerDial(p peer.ID) (allow bool) {
+	// Allow peer dial - we'll check addresses in InterceptAddrDial
+	return true
+}
+
+// InterceptAddrDial blocks dialing to RFC1918 addresses
+func (g *RFC1918ConnectionGater) InterceptAddrDial(pid peer.ID, addr ma.Multiaddr) (allow bool) {
+	if HasRFC1918Address(addr) {
+		log.Debugf("Blocked dial to RFC1918 address: %s (peer: %s)", addr.String(), pid.String())
+		return false
+	}
+	return true
+}
+
+// InterceptAccept blocks incoming connections from RFC1918 addresses
+func (g *RFC1918ConnectionGater) InterceptAccept(conn network.ConnMultiaddrs) (allow bool) {
+	remoteAddr := conn.RemoteMultiaddr()
+	if HasRFC1918Address(remoteAddr) {
+		log.Debugf("Blocked incoming connection from RFC1918 address: %s", remoteAddr.String())
+		return false
+	}
+	return true
+}
+
+// InterceptSecured blocks secured connections to RFC1918 addresses
+func (g *RFC1918ConnectionGater) InterceptSecured(direction network.Direction, pid peer.ID, conn network.ConnMultiaddrs) (allow bool) {
+	remoteAddr := conn.RemoteMultiaddr()
+	if HasRFC1918Address(remoteAddr) {
+		log.Debugf("Blocked secured connection to RFC1918 address: %s (peer: %s)", remoteAddr.String(), pid.String())
+		return false
+	}
+	return true
+}
+
+// InterceptUpgraded blocks upgraded connections to RFC1918 addresses
+func (g *RFC1918ConnectionGater) InterceptUpgraded(conn network.Conn) (allow bool, reason control.DisconnectReason) {
+	remoteAddr := conn.RemoteMultiaddr()
+	if HasRFC1918Address(remoteAddr) {
+		log.Debugf("Blocked upgraded connection to RFC1918 address: %s", remoteAddr.String())
+		return false, control.DisconnectReason(0) // No specific reason needed
+	}
+	return true, control.DisconnectReason(0)
+}
+
+// Ensure RFC1918ConnectionGater implements connmgr.ConnectionGater
+var _ connmgr.ConnectionGater = (*RFC1918ConnectionGater)(nil)
