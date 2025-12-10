@@ -104,20 +104,18 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 	}
 	deps.mu.RUnlock()
 
-	// Ensure write semaphore capacity matches stream pool size
-	maxConcurrentWrites := config.SettingsObj.MaxConcurrentWrites
+	// REMOVED: Write semaphore is redundant - stream pool request queue already provides backpressure
+	// The semaphore was causing issues when MAX_CONCURRENT_WRITES > MAX_STREAM_POOL_SIZE:
+	// - Requests would acquire semaphore but couldn't get streams
+	// - This blocked new requests from acquiring semaphore
+	// - Result: Submissions timeout/get skipped
+	// Stream pool's reqQueue (MAX_STREAM_QUEUE_SIZE) already throttles concurrent requests
+
 	maxStreamPoolSize := config.SettingsObj.MaxStreamPoolSize
-	if maxConcurrentWrites > maxStreamPoolSize {
-		log.Warnf("MAX_CONCURRENT_WRITES (%d) > MAX_STREAM_POOL_SIZE (%d), capping to pool size to prevent deadlocks",
-			maxConcurrentWrites, maxStreamPoolSize)
-		maxConcurrentWrites = maxStreamPoolSize
-	}
-	
-	log.Infof("Initializing write semaphore with capacity %d (stream pool size: %d)", 
-		maxConcurrentWrites, maxStreamPoolSize)
-	
+	log.Infof("Stream pool size: %d", maxStreamPoolSize)
+
 	server := &server{
-		writeSemaphore: make(chan struct{}, maxConcurrentWrites),
+		writeSemaphore: nil, // Not used anymore
 		metrics:        &sync.Map{},
 		pubsub:         gossiper,
 		joinedTopics:   make(map[string]*pubsub.Topic),
@@ -245,27 +243,14 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	b := backoff.NewExponentialBackOff()
 	b.MaxElapsedTime = 30 * time.Second
 
+	// REMOVED: Semaphore acquisition - stream pool request queue already provides backpressure
+	// Directly attempt write - stream pool will throttle via reqQueue if needed
 	err = backoff.Retry(func() error {
-		// Acquire writeSemaphore with timeout to prevent indefinite blocking
-		// This allows requests to wait for capacity instead of immediately failing
-		// The timeout prevents requests from blocking indefinitely when the system is overloaded
-		ctx, cancel := context.WithTimeout(context.Background(), config.SettingsObj.WriteSemaphoreTimeout)
-		defer cancel()
-
-		select {
-		case s.writeSemaphore <- struct{}{}:
-			// Successfully acquired semaphore, defer release
-			defer func() { <-s.writeSemaphore }()
-		case <-ctx.Done():
-			// Timeout waiting for semaphore - retriable error
-			// This allows the backoff mechanism to retry after a delay
-			return fmt.Errorf("timeout waiting for write capacity")
-		}
-
-		// Then try to write
+		// Try to write - stream pool handles throttling via request queue
 		if err := s.writeToStream(submissionBytes, submissionId.String(), submission); err != nil {
 			if strings.Contains(err.Error(), "request queue full") ||
-				strings.Contains(err.Error(), "connection refresh in progress") {
+				strings.Contains(err.Error(), "connection refresh in progress") ||
+				strings.Contains(err.Error(), "stream connection closed") {
 				return err // Retriable
 			}
 			return backoff.Permanent(err)
@@ -319,6 +304,10 @@ func (s *server) writeToStream(data []byte, submissionId string, submission *pkg
 	if err != nil {
 		return err
 	}
+
+	// REMOVED: Stream validation before write (adds latency)
+	// Streams are invalidated immediately when connection closes via DisconnectedF callback
+	// If stream is dead, Write() will fail fast, which is handled below
 
 	// Set write deadline before attempting write
 	if err := sw.stream.SetWriteDeadline(time.Now().Add(config.SettingsObj.StreamWriteTimeout)); err != nil {
@@ -450,13 +439,9 @@ func (s *server) logMetricsPeriodically(interval time.Duration) {
 func (s *server) GracefulShutdown() {
 	log.Info("Starting graceful shutdown...")
 
-	// Wait for all ongoing writes to complete
-	for i := 0; i < cap(s.writeSemaphore); i++ {
-		s.writeSemaphore <- struct{}{}
-	}
-
-	// Close the write semaphore to stop accepting new writes
-	close(s.writeSemaphore)
+	// REMOVED: Semaphore shutdown - semaphore no longer used
+	// Stream pool provides backpressure via request queue
+	// Ongoing writes will complete naturally or timeout
 
 	// Stop the gRPC server gracefully
 	grpcServer.GracefulStop()

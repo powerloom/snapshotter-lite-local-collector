@@ -139,9 +139,14 @@ func CreateLibP2pHost() error {
 		return err
 	}
 
+	// Create RFC1918 connection gater to block private IP connections
+	// This is required by Hetzner to prevent scanning of internal networks
+	rfc1918Gater := &RFC1918ConnectionGater{}
+
 	opts := []libp2p.Option{
 		libp2p.EnableRelay(),
 		libp2p.ConnectionManager(ConnManager),
+		libp2p.ConnectionGater(rfc1918Gater), // Block RFC1918 connections at dial level
 		libp2p.ListenAddrs(TcpAddr),
 		libp2p.ResourceManager(rm),
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
@@ -190,6 +195,13 @@ func CreateLibP2pHost() error {
 		},
 		DisconnectedF: func(_ network.Network, conn network.Conn) {
 			totalConnections := len(P2PHost.Network().Peers())
+
+			// CRITICAL: Immediately invalidate all streams on this connection
+			// This prevents dead streams from being used after connection closes
+			pool := GetLibp2pStreamPool()
+			if pool != nil && conn.RemotePeer() == SequencerID {
+				pool.InvalidateStreamsForConnection(conn)
+			}
 
 			// NOTE: Direction tells us who INITIATED the connection, not who closed it
 			// DirOutbound = we dialed them (we initiated connection)
