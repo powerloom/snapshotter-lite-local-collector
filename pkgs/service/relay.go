@@ -159,6 +159,43 @@ func CreateLibP2pHost() error {
 		libp2p.Muxer(yamux.ID, yamux.DefaultTransport),
 	}
 
+	// Parse bootstrap nodes for AutoRelay (when PUBLIC_IP is not set)
+	var staticRelays []peer.AddrInfo
+	if config.SettingsObj.PublicIP == "" && len(config.SettingsObj.BootstrapNodeAddrs) > 0 {
+		for _, bootstrapAddr := range config.SettingsObj.BootstrapNodeAddrs {
+			if bootstrapAddr == "" {
+				continue
+			}
+			peerMA, err := ma.NewMultiaddr(bootstrapAddr)
+			if err != nil {
+				log.Debugf("Failed to parse bootstrap addr for AutoRelay: %v", err)
+				continue
+			}
+			// Skip RFC1918 addresses
+			if HasRFC1918Address(peerMA) {
+				continue
+			}
+			peerInfo, err := peer.AddrInfoFromP2pAddr(peerMA)
+			if err != nil {
+				log.Debugf("Failed to parse bootstrap peer info for AutoRelay: %v", err)
+				continue
+			}
+			// Filter RFC1918 addresses from peer info
+			if len(peerInfo.Addrs) > 0 {
+				filteredAddrs, _ := FilterRFC1918Multiaddrs(peerInfo.Addrs)
+				if len(filteredAddrs) == 0 {
+					continue
+				}
+				peerInfo.Addrs = filteredAddrs
+			}
+			staticRelays = append(staticRelays, *peerInfo)
+		}
+		if len(staticRelays) > 0 {
+			opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(staticRelays))
+			log.Infof("AutoRelay enabled with %d bootstrap nodes as static relays (PUBLIC_IP not set)", len(staticRelays))
+		}
+	}
+
 	// Add public IP address if configured (like DSV nodes do)
 	// This ensures we advertise the correct public IP and port in DHT
 	if config.SettingsObj.PublicIP != "" {
