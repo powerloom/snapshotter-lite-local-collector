@@ -946,6 +946,31 @@ func (s *server) startDSVRendezvousDiscovery() {
 
 	routingDiscovery := routing.NewRoutingDiscovery(deps.dht)
 
+	// When AutoRelay is enabled (PUBLIC_IP not set), wait for relay reservations to establish
+	// before starting DHT advertising to ensure circuit relay addresses are available
+	isAutoRelayEnabled := config.SettingsObj.PublicIP == ""
+	if isAutoRelayEnabled {
+		log.Info("AutoRelay enabled - waiting 10 seconds for relay reservations to establish before DHT advertising")
+		time.Sleep(10 * time.Second)
+
+		// Log circuit relay addresses if available
+		addrs := deps.hostConn.Addrs()
+		circuitAddrs := 0
+		for _, addr := range addrs {
+			// Check if address contains p2p-circuit protocol (circuit relay addresses)
+			addrStr := addr.String()
+			if strings.Contains(addrStr, "/p2p-circuit/") {
+				circuitAddrs++
+				log.Debugf("Found circuit relay address: %s", addrStr)
+			}
+		}
+		if circuitAddrs > 0 {
+			log.Infof("Circuit relay addresses available: %d relay addresses in host address list", circuitAddrs)
+		} else {
+			log.Warn("No circuit relay addresses found yet - relay reservations may still be establishing")
+		}
+	}
+
 	// Advertise our presence on the DSV rendezvous point
 	go func() {
 		log.Debugf("Advertising on DSV rendezvous point: %s", dsvRendezvousPoint)
@@ -954,7 +979,12 @@ func (s *server) startDSVRendezvousDiscovery() {
 		util.Advertise(ctx, routingDiscovery, dsvRendezvousPoint)
 
 		// Continuous advertising with retries
-		ticker := time.NewTicker(5 * time.Minute) // Re-advertise every 5 minutes
+		// More frequent advertising when AutoRelay is enabled to ensure circuit addresses are advertised
+		advertiseInterval := 5 * time.Minute
+		if isAutoRelayEnabled {
+			advertiseInterval = 30 * time.Second // Re-advertise every 30 seconds with AutoRelay for faster discovery
+		}
+		ticker := time.NewTicker(advertiseInterval)
 		defer ticker.Stop()
 
 		for {
@@ -970,7 +1000,16 @@ func (s *server) startDSVRendezvousDiscovery() {
 
 	// Continuously discover peers from the DSV rendezvous point
 	go func() {
-		ticker := time.NewTicker(30 * time.Second) // Discover peers every 30 seconds
+		// More aggressive discovery when AutoRelay is enabled
+		discoveryInterval := 30 * time.Second
+		if isAutoRelayEnabled {
+			discoveryInterval = 10 * time.Second // Discover every 10 seconds with AutoRelay
+		}
+
+		// Immediate discovery after initialization
+		s.discoverDSVPeers(ctx, routingDiscovery, dsvRendezvousPoint)
+
+		ticker := time.NewTicker(discoveryInterval)
 		defer ticker.Stop()
 
 		for {
