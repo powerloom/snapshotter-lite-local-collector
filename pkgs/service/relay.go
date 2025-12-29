@@ -235,9 +235,12 @@ func CreateLibP2pHost() error {
 
 			// CRITICAL: Immediately invalidate all streams on this connection
 			// This prevents dead streams from being used after connection closes
-			pool := GetLibp2pStreamPool()
-			if pool != nil && conn.RemotePeer() == SequencerID {
-				pool.InvalidateStreamsForConnection(conn)
+			// Only do this if centralized sequencer is enabled
+			if config.SettingsObj.CentralizedSequencerEnabled {
+				pool := GetLibp2pStreamPool()
+				if pool != nil && conn.RemotePeer() == SequencerID {
+					pool.InvalidateStreamsForConnection(conn)
+				}
 			}
 
 			// NOTE: Direction tells us who INITIATED the connection, not who closed it
@@ -366,6 +369,12 @@ func StartConnectionRefreshLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Skip connection refresh if centralized sequencer is disabled
+			if !config.SettingsObj.CentralizedSequencerEnabled {
+				log.Debug("Skipping connection refresh - centralized sequencer disabled")
+				continue
+			}
+
 			log.Info("🔄 Starting periodic connection refresh cycle")
 
 			connectionRefreshing.Store(true)

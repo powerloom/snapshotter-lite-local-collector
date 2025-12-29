@@ -513,9 +513,11 @@ func (s *server) GracefulShutdown() {
 	// Stop the gRPC server gracefully
 	grpcServer.GracefulStop()
 
-	// Stop the libp2p stream pool
-	if pool := GetLibp2pStreamPool(); pool != nil {
-		pool.Stop()
+	// Stop the libp2p stream pool only if centralized sequencer is enabled
+	if config.SettingsObj.CentralizedSequencerEnabled {
+		if pool := GetLibp2pStreamPool(); pool != nil {
+			pool.Stop()
+		}
 	}
 
 	log.Info("🧹 Graceful shutdown complete")
