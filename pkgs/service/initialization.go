@@ -108,12 +108,18 @@ func InitializeService() error {
 	log.Info("Initialized gossipsub with standardized snapshot submissions mesh parameters")
 	log.Debug("Configuration: Using gossipconfig package with anti-pruning optimizations")
 
-	// Initialize stream pool
-	if err := InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize); err != nil {
-		return fmt.Errorf("failed to initialize stream pool: %w", err)
+	// Initialize stream pool only if centralized sequencer is enabled
+	if config.SettingsObj.CentralizedSequencerEnabled {
+		if err := InitLibp2pStreamPool(config.SettingsObj.MaxStreamPoolSize); err != nil {
+			return fmt.Errorf("failed to initialize stream pool: %w", err)
+		}
+		deps.streamPool = GetLibp2pStreamPool()
+		log.Info("Stream pool initialized for centralized sequencer submissions")
+	} else {
+		log.Info("Centralized sequencer disabled - skipping stream pool initialization")
+		deps.streamPool = nil
 	}
 
-	deps.streamPool = GetLibp2pStreamPool()
 	deps.initialized = true
 
 	log.Info("Service initialization complete with sequencer ID: ", deps.sequencerID.String())

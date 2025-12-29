@@ -6,9 +6,9 @@ The Local Collector is a Go-based service that receives snapshot submissions fro
 
 The Local Collector acts as an intermediary service that:
 - Receives snapshot submissions from snapshotter nodes over gRPC
-- Forwards submissions to the legacy centralized sequencer via libp2p stream pool
+- Optionally forwards submissions to the legacy centralized sequencer via libp2p stream pool (can be disabled)
 - Broadcasts submissions to the DSV network via gossipsub (P2P)
-- Implements dual submission pattern: each submission goes to both destinations
+- Implements dual submission pattern: each submission goes to both destinations (when centralized sequencer is enabled)
 
 ## Architecture
 
@@ -28,7 +28,9 @@ The Local Collector acts as an intermediary service that:
 
 ## Features
 
-- **Dual Submission**: Submissions are sent to both legacy centralized sequencer and DSV network
+- **Dual Submission**: Submissions are sent to both legacy centralized sequencer and DSV network (when centralized sequencer is enabled)
+- **Configurable Centralized Sequencer**: Can disable centralized sequencer submissions via `CENTRALIZED_SEQUENCER_ENABLED` config
+- **Mesh Concurrency Controls**: Rate limiting and resource limits for mesh submissions to prevent overwhelming the network
 - **Non-blocking Semaphore**: Prevents indefinite blocking when system is at capacity
 - **Gossipsub Integration**: P2P broadcasting to decentralized sequencer network
 - **DHT-based Peer Discovery**: Automatic peer discovery for gossipsub mesh
@@ -120,6 +122,48 @@ Key environment variables:
 - `CONN_MANAGER_LOW_WATER`: Connection manager low water mark
 - `CONN_MANAGER_HIGH_WATER`: Connection manager high water mark
 - `WRITE_SEMAPHORE_TIMEOUT_SEC`: Timeout for semaphore acquisition (default: 5)
+
+### Centralized Sequencer Configuration
+
+- `CENTRALIZED_SEQUENCER_ENABLED`: Enable/disable submissions to centralized sequencer (default: `true`)
+  - When set to `false`, all submissions to the centralized sequencer are disabled
+  - Stream pool initialization is skipped when disabled
+  - Mesh submissions continue to work normally
+  - Useful when transitioning to mesh-only submissions or during centralized sequencer maintenance
+
+### Mesh Submission Concurrency Controls
+
+The following configuration options control concurrency and rate limiting for mesh submissions:
+
+- `MESH_SUBMISSION_RATE_LIMIT`: Maximum submissions per second (default: 100)
+  - Uses token bucket algorithm for rate limiting
+  - Prevents overwhelming the gossipsub network with too many messages
+  - Submissions exceeding the rate limit are queued (if queue space available)
+
+- `MESH_SUBMISSION_BURST_SIZE`: Burst allowance for rate limiter (default: 200)
+  - Allows short bursts above the rate limit
+  - Helps handle traffic spikes without dropping submissions
+
+- `MAX_MESH_PUBLISH_GOROUTINES`: Maximum concurrent mesh publish operations (default: 500)
+  - Limits the number of goroutines actively publishing to the mesh
+  - Prevents resource exhaustion from too many concurrent operations
+  - Uses semaphore pattern for goroutine control
+
+- `MESH_PUBLISH_QUEUE_SIZE`: Maximum queued mesh submissions (default: 1000)
+  - Queue size for submissions waiting for rate limiter
+  - When queue is full, submissions are dropped
+  - Monitor `mesh_submissions_dropped` metric to detect queue saturation
+
+### Monitoring Mesh Concurrency
+
+The following metrics are tracked and logged periodically:
+
+- `mesh_rate_limited`: Count of submissions rate limited
+- `mesh_submissions_queued`: Current queue depth
+- `mesh_publish_active`: Current active publish goroutines
+- `mesh_submissions_dropped`: Submissions dropped due to full queue or timeout
+
+These metrics are included in the periodic metrics report (every 15 seconds) and can be used to tune the concurrency control parameters.
 
 ### Regenerating Protobuf Files
 

@@ -22,6 +22,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
 	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 )
 
@@ -90,6 +91,15 @@ type server struct {
 	// Connection state tracking
 	recentDisconnections []disconnectRecord // Track disconnection timestamps and direction for diagnostics
 	disconnectionsMu     sync.RWMutex
+
+	// Mesh submission concurrency controls
+	meshRateLimiter        *rate.Limiter                 // Rate limiter for mesh submissions
+	meshPublishSemaphore   chan struct{}                 // Semaphore for limiting concurrent mesh publish operations
+	meshPublishQueue       chan *pkgs.SnapshotSubmission // Queue for mesh submissions when rate limited
+	meshRateLimited        atomic.Uint64                 // Count of submissions rate limited
+	meshSubmissionsQueued  atomic.Uint64                 // Current queue depth
+	meshPublishActive      atomic.Uint64                 // Current active publish goroutines
+	meshSubmissionsDropped atomic.Uint64                 // Submissions dropped due to full queue
 }
 
 var _ pkgs.SubmissionServer = &server{}
@@ -114,11 +124,28 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 	maxStreamPoolSize := config.SettingsObj.MaxStreamPoolSize
 	log.Infof("Stream pool size: %d", maxStreamPoolSize)
 
+	// Initialize mesh submission rate limiter
+	rateLimit := rate.Limit(config.SettingsObj.MeshSubmissionRateLimit)
+	burstSize := config.SettingsObj.MeshSubmissionBurstSize
+	meshRateLimiter := rate.NewLimiter(rateLimit, burstSize)
+	log.Infof("Mesh submission rate limiter: %d/sec, burst: %d", config.SettingsObj.MeshSubmissionRateLimit, burstSize)
+
+	// Initialize mesh publish semaphore (buffered channel)
+	meshPublishSemaphore := make(chan struct{}, config.SettingsObj.MaxMeshPublishGoroutines)
+	log.Infof("Mesh publish goroutine limit: %d", config.SettingsObj.MaxMeshPublishGoroutines)
+
+	// Initialize mesh publish queue
+	meshPublishQueue := make(chan *pkgs.SnapshotSubmission, config.SettingsObj.MeshPublishQueueSize)
+	log.Infof("Mesh publish queue size: %d", config.SettingsObj.MeshPublishQueueSize)
+
 	server := &server{
-		writeSemaphore: nil, // Not used anymore
-		metrics:        &sync.Map{},
-		pubsub:         gossiper,
-		joinedTopics:   make(map[string]*pubsub.Topic),
+		writeSemaphore:       nil, // Not used anymore
+		metrics:              &sync.Map{},
+		pubsub:               gossiper,
+		joinedTopics:         make(map[string]*pubsub.Topic),
+		meshRateLimiter:      meshRateLimiter,
+		meshPublishSemaphore: meshPublishSemaphore,
+		meshPublishQueue:     meshPublishQueue,
 		meshMetrics: MeshHealthMetrics{
 			State:     MeshStatePruned, // Start as pruned until mesh is actually checked
 			StartTime: time.Now(),
@@ -126,6 +153,9 @@ func NewMsgServerImplV2() pkgs.SubmissionServer {
 		meshLifecycleHooks:   make([]MeshLifecycleHook, 0),
 		recentDisconnections: make([]disconnectRecord, 0),
 	}
+
+	// Start mesh publish queue processor
+	go server.processMeshPublishQueue()
 
 	// Store server instance in deps for disconnection tracking
 	deps.mu.Lock()
@@ -218,50 +248,57 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 	// Only broadcast if it's for current epoch or epoch 0 (discovery)
 	go s.broadcastToGossipsub(submission)
 
-	submissionId := uuid.New()
-	submissionIdBytes, err := submissionId.MarshalText()
-	if err != nil {
-		log.Errorln("Error marshalling submissionId: ", err.Error())
-		return &pkgs.SubmissionResponse{Message: "Failure"}, err
-	}
-
-	subBytes, err := json.Marshal(submission)
-	if err != nil {
-		log.Errorln("Could not marshal submission: ", err.Error())
-		return &pkgs.SubmissionResponse{Message: "Failure"}, err
-	}
-	log.Debugln("Sending submission with ID: ", submissionId.String())
-
-	submissionBytes := submissionIdBytes
-	submissionBytes = append(submissionBytes, subBytes...)
-
 	// Track received submission for this epoch
 	metrics := s.getOrCreateEpochMetrics(submission.Request.EpochId)
 	metrics.received.Add(1)
 
-	// Single write attempt with backoff
-	b := backoff.NewExponentialBackOff()
-	b.MaxElapsedTime = 30 * time.Second
-
-	// REMOVED: Semaphore acquisition - stream pool request queue already provides backpressure
-	// Directly attempt write - stream pool will throttle via reqQueue if needed
-	err = backoff.Retry(func() error {
-		// Try to write - stream pool handles throttling via request queue
-		if err := s.writeToStream(submissionBytes, submissionId.String(), submission); err != nil {
-			if strings.Contains(err.Error(), "request queue full") ||
-				strings.Contains(err.Error(), "connection refresh in progress") ||
-				strings.Contains(err.Error(), "stream connection closed") {
-				return err // Retriable
-			}
-			return backoff.Permanent(err)
+	// Submit to centralized sequencer only if enabled
+	if config.SettingsObj.CentralizedSequencerEnabled {
+		submissionId := uuid.New()
+		submissionIdBytes, err := submissionId.MarshalText()
+		if err != nil {
+			log.Errorln("Error marshalling submissionId: ", err.Error())
+			return &pkgs.SubmissionResponse{Message: "Failure"}, err
 		}
-		metrics.succeeded.Add(1)
-		return nil
-	}, b)
 
-	if err != nil {
-		log.Errorf("❌ Failed to submit snapshot after retries: %v", err)
-		return &pkgs.SubmissionResponse{Message: "Failure"}, err
+		subBytes, err := json.Marshal(submission)
+		if err != nil {
+			log.Errorln("Could not marshal submission: ", err.Error())
+			return &pkgs.SubmissionResponse{Message: "Failure"}, err
+		}
+		log.Debugln("Sending submission with ID: ", submissionId.String())
+
+		submissionBytes := submissionIdBytes
+		submissionBytes = append(submissionBytes, subBytes...)
+
+		// Single write attempt with backoff
+		b := backoff.NewExponentialBackOff()
+		b.MaxElapsedTime = 30 * time.Second
+
+		// REMOVED: Semaphore acquisition - stream pool request queue already provides backpressure
+		// Directly attempt write - stream pool will throttle via reqQueue if needed
+		err = backoff.Retry(func() error {
+			// Try to write - stream pool handles throttling via request queue
+			if err := s.writeToStream(submissionBytes, submissionId.String(), submission); err != nil {
+				if strings.Contains(err.Error(), "request queue full") ||
+					strings.Contains(err.Error(), "connection refresh in progress") ||
+					strings.Contains(err.Error(), "stream connection closed") {
+					return err // Retriable
+				}
+				return backoff.Permanent(err)
+			}
+			metrics.succeeded.Add(1)
+			return nil
+		}, b)
+
+		if err != nil {
+			log.Errorf("❌ Failed to submit snapshot after retries: %v", err)
+			return &pkgs.SubmissionResponse{Message: "Failure"}, err
+		}
+	} else {
+		log.Debugln("Centralized sequencer submissions disabled - skipping stream write")
+		// Still mark as succeeded since mesh submission was initiated
+		metrics.succeeded.Add(1)
 	}
 
 	return &pkgs.SubmissionResponse{Message: "Success"}, nil
@@ -406,6 +443,26 @@ func (s *server) GetMetrics() map[uint64]struct {
 	return result
 }
 
+// GetMeshConcurrencyMetrics returns current mesh concurrency metrics
+func (s *server) GetMeshConcurrencyMetrics() struct {
+	RateLimited        uint64
+	SubmissionsQueued  uint64
+	PublishActive      uint64
+	SubmissionsDropped uint64
+} {
+	return struct {
+		RateLimited        uint64
+		SubmissionsQueued  uint64
+		PublishActive      uint64
+		SubmissionsDropped uint64
+	}{
+		RateLimited:        s.meshRateLimited.Load(),
+		SubmissionsQueued:  s.meshSubmissionsQueued.Load(),
+		PublishActive:      s.meshPublishActive.Load(),
+		SubmissionsDropped: s.meshSubmissionsDropped.Load(),
+	}
+}
+
 func (s *server) logMetricsPeriodically(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -414,9 +471,19 @@ func (s *server) logMetricsPeriodically(interval time.Duration) {
 		currentEpoch := s.currentEpoch.Load()
 		metrics := s.GetMetrics()
 
+		// Get mesh concurrency metrics
+		meshRateLimited := s.meshRateLimited.Load()
+		meshSubmissionsQueued := s.meshSubmissionsQueued.Load()
+		meshPublishActive := s.meshPublishActive.Load()
+		meshSubmissionsDropped := s.meshSubmissionsDropped.Load()
+
 		log.WithFields(log.Fields{
-			"current_epoch": currentEpoch,
-			"metrics":       metrics,
+			"current_epoch":            currentEpoch,
+			"metrics":                  metrics,
+			"mesh_rate_limited":        meshRateLimited,
+			"mesh_submissions_queued":  meshSubmissionsQueued,
+			"mesh_publish_active":      meshPublishActive,
+			"mesh_submissions_dropped": meshSubmissionsDropped,
 		}).Info("📊 Periodic metrics report")
 
 		// Detailed per-epoch logging
@@ -464,7 +531,70 @@ func GracefulShutdownServer(s pkgs.SubmissionServer) {
 	log.Warn("Graceful shutdown is not supported for the provided server instance")
 }
 
+// broadcastToGossipsub applies rate limiting and queues submissions if needed
 func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
+	// Check rate limiter (non-blocking check first)
+	if !s.meshRateLimiter.Allow() {
+		// Rate limit exceeded - try to queue
+		s.meshRateLimited.Add(1)
+		select {
+		case s.meshPublishQueue <- submission:
+			s.meshSubmissionsQueued.Add(1)
+			log.Debugf("Rate limited - queued submission (Project: %s, Epoch: %d), queue depth: %d",
+				submission.Request.ProjectId, submission.Request.EpochId, s.meshSubmissionsQueued.Load())
+		default:
+			// Queue full - drop submission
+			s.meshSubmissionsDropped.Add(1)
+			log.Warnf("Rate limited and queue full - dropping submission (Project: %s, Epoch: %d)",
+				submission.Request.ProjectId, submission.Request.EpochId)
+		}
+		return
+	}
+
+	// Rate limit allows - publish directly (will acquire semaphore internally)
+	s.publishToMesh(submission)
+}
+
+// processMeshPublishQueue processes queued mesh submissions with rate limiting
+func (s *server) processMeshPublishQueue() {
+	for submission := range s.meshPublishQueue {
+		s.meshSubmissionsQueued.Add(^uint64(0)) // Decrement queue depth
+
+		// Wait for rate limiter (with timeout to prevent indefinite blocking)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := s.meshRateLimiter.Wait(ctx)
+		cancel()
+
+		if err != nil {
+			// Timeout waiting for rate limiter - drop submission
+			s.meshSubmissionsDropped.Add(1)
+			log.Warnf("Rate limiter timeout for submission (Project: %s, Epoch: %d) - dropping",
+				submission.Request.ProjectId, submission.Request.EpochId)
+			continue
+		}
+
+		// Publish the submission (this will acquire semaphore internally)
+		s.publishToMesh(submission)
+	}
+}
+
+// publishToMesh publishes a submission to the mesh with goroutine semaphore control
+func (s *server) publishToMesh(submission *pkgs.SnapshotSubmission) {
+	// Acquire semaphore (non-blocking with timeout)
+	select {
+	case s.meshPublishSemaphore <- struct{}{}:
+		s.meshPublishActive.Add(1)
+		defer func() {
+			<-s.meshPublishSemaphore
+			s.meshPublishActive.Add(^uint64(0)) // Decrement active count
+		}()
+	case <-time.After(5 * time.Second):
+		s.meshSubmissionsDropped.Add(1)
+		log.Warnf("Semaphore timeout for submission (Project: %s, Epoch: %d) - dropping",
+			submission.Request.ProjectId, submission.Request.EpochId)
+		return
+	}
+
 	// Determine which topic to use based on two-level architecture
 	var topicString string
 	var topic *pubsub.Topic

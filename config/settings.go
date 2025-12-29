@@ -55,6 +55,15 @@ type Settings struct {
 
 	// Health check server port
 	HealthCheckPort string
+
+	// Centralized sequencer configuration
+	CentralizedSequencerEnabled bool
+
+	// Mesh submission concurrency controls
+	MeshSubmissionRateLimit  int // Max submissions per second
+	MeshSubmissionBurstSize  int // Burst allowance
+	MaxMeshPublishGoroutines int // Max concurrent mesh publish operations
+	MeshPublishQueueSize     int // Max queued mesh submissions
 }
 
 func LoadConfig() {
@@ -126,6 +135,15 @@ func LoadConfig() {
 	// Add write semaphore timeout (default 5 seconds)
 	config.WriteSemaphoreTimeout = time.Duration(getEnvAsInt("WRITE_SEMAPHORE_TIMEOUT_SEC", 5)) * time.Second
 
+	// Centralized sequencer configuration (default: enabled)
+	config.CentralizedSequencerEnabled = getEnvAsBool("CENTRALIZED_SEQUENCER_ENABLED", true)
+
+	// Mesh submission concurrency controls
+	config.MeshSubmissionRateLimit = getEnvAsInt("MESH_SUBMISSION_RATE_LIMIT", 100)
+	config.MeshSubmissionBurstSize = getEnvAsInt("MESH_SUBMISSION_BURST_SIZE", 200)
+	config.MaxMeshPublishGoroutines = getEnvAsInt("MAX_MESH_PUBLISH_GOROUTINES", 500)
+	config.MeshPublishQueueSize = getEnvAsInt("MESH_PUBLISH_QUEUE_SIZE", 1000)
+
 	SettingsObj = &config
 }
 
@@ -142,6 +160,16 @@ func getEnvAsInt(key string, defaultValue int) int {
 			return intVal
 		}
 		log.Warnf("Invalid value for %s, using default: %d", key, defaultValue)
+	}
+	return defaultValue
+}
+
+func getEnvAsBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolVal, err := strconv.ParseBool(value); err == nil {
+			return boolVal
+		}
+		log.Warnf("Invalid value for %s, using default: %v", key, defaultValue)
 	}
 	return defaultValue
 }
