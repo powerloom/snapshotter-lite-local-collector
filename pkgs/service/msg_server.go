@@ -97,9 +97,11 @@ type server struct {
 	meshPublishSemaphore   chan struct{}                 // Semaphore for limiting concurrent mesh publish operations
 	meshPublishQueue       chan *pkgs.SnapshotSubmission // Queue for mesh submissions when rate limited
 	meshRateLimited        atomic.Uint64                 // Count of submissions rate limited
-	meshSubmissionsQueued  atomic.Uint64                 // Current queue depth
+	meshSubmissionsQueued  atomic.Uint64                 // Current queue depth (deprecated - use len(meshPublishQueue))
 	meshPublishActive      atomic.Uint64                 // Current active publish goroutines
 	meshSubmissionsDropped atomic.Uint64                 // Submissions dropped due to full queue
+	meshPublished          atomic.Uint64                 // Messages successfully published to gossipsub
+	meshPublishFailed      atomic.Uint64                 // Messages that failed to publish to gossipsub
 }
 
 var _ pkgs.SubmissionServer = &server{}
@@ -297,8 +299,8 @@ func (s *server) SubmitSnapshot(ctx context.Context, submission *pkgs.SnapshotSu
 		}
 	} else {
 		log.Debugln("Centralized sequencer submissions disabled - skipping stream write")
-		// Still mark as succeeded since mesh submission was initiated
-		metrics.succeeded.Add(1)
+		// Don't mark as succeeded - mesh submission is fire-and-forget, delivery not guaranteed
+		// Success will be tracked separately via mesh_published metric when publish succeeds
 	}
 
 	return &pkgs.SubmissionResponse{Message: "Success"}, nil
@@ -449,17 +451,23 @@ func (s *server) GetMeshConcurrencyMetrics() struct {
 	SubmissionsQueued  uint64
 	PublishActive      uint64
 	SubmissionsDropped uint64
+	Published          uint64
+	PublishFailed      uint64
 } {
 	return struct {
 		RateLimited        uint64
 		SubmissionsQueued  uint64
 		PublishActive      uint64
 		SubmissionsDropped uint64
+		Published          uint64
+		PublishFailed      uint64
 	}{
 		RateLimited:        s.meshRateLimited.Load(),
-		SubmissionsQueued:  s.meshSubmissionsQueued.Load(),
+		SubmissionsQueued:  uint64(len(s.meshPublishQueue)), // Use actual queue length
 		PublishActive:      s.meshPublishActive.Load(),
 		SubmissionsDropped: s.meshSubmissionsDropped.Load(),
+		Published:          s.meshPublished.Load(),
+		PublishFailed:      s.meshPublishFailed.Load(),
 	}
 }
 
@@ -473,9 +481,11 @@ func (s *server) logMetricsPeriodically(interval time.Duration) {
 
 		// Get mesh concurrency metrics
 		meshRateLimited := s.meshRateLimited.Load()
-		meshSubmissionsQueued := s.meshSubmissionsQueued.Load()
+		meshSubmissionsQueued := uint64(len(s.meshPublishQueue)) // Use actual queue length, not atomic counter
 		meshPublishActive := s.meshPublishActive.Load()
 		meshSubmissionsDropped := s.meshSubmissionsDropped.Load()
+		meshPublished := s.meshPublished.Load()
+		meshPublishFailed := s.meshPublishFailed.Load()
 
 		log.WithFields(log.Fields{
 			"current_epoch":            currentEpoch,
@@ -484,6 +494,8 @@ func (s *server) logMetricsPeriodically(interval time.Duration) {
 			"mesh_submissions_queued":  meshSubmissionsQueued,
 			"mesh_publish_active":      meshPublishActive,
 			"mesh_submissions_dropped": meshSubmissionsDropped,
+			"mesh_published":           meshPublished,
+			"mesh_publish_failed":      meshPublishFailed,
 		}).Info("📊 Periodic metrics report")
 
 		// Detailed per-epoch logging
@@ -496,8 +508,9 @@ func (s *server) logMetricsPeriodically(interval time.Duration) {
 			log.WithFields(log.Fields{
 				"epoch_id":     epochID,
 				"received":     m.Received,
-				"succeeded":    m.Succeeded,
+				"succeeded":    m.Succeeded, // Only counts centralized sequencer submissions
 				"success_rate": fmt.Sprintf("%.2f%%", successRate),
+				"note":         "succeeded only counts centralized sequencer submissions; mesh submissions tracked separately via mesh_published",
 			}).Info("📈 Epoch metrics")
 		}
 	}
@@ -541,9 +554,9 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 		s.meshRateLimited.Add(1)
 		select {
 		case s.meshPublishQueue <- submission:
-			s.meshSubmissionsQueued.Add(1)
+			s.meshSubmissionsQueued.Add(1) // Keep for backward compatibility, but use len(queue) for actual metrics
 			log.Debugf("Rate limited - queued submission (Project: %s, Epoch: %d), queue depth: %d",
-				submission.Request.ProjectId, submission.Request.EpochId, s.meshSubmissionsQueued.Load())
+				submission.Request.ProjectId, submission.Request.EpochId, len(s.meshPublishQueue))
 		default:
 			// Queue full - drop submission
 			s.meshSubmissionsDropped.Add(1)
@@ -560,10 +573,11 @@ func (s *server) broadcastToGossipsub(submission *pkgs.SnapshotSubmission) {
 // processMeshPublishQueue processes queued mesh submissions with rate limiting
 func (s *server) processMeshPublishQueue() {
 	for submission := range s.meshPublishQueue {
-		s.meshSubmissionsQueued.Add(^uint64(0)) // Decrement queue depth
+		// Note: Queue depth is tracked via len(s.meshPublishQueue), not atomic counter
+		// The atomic counter was incorrect (using bitwise NOT instead of decrement)
 
-		// Wait for rate limiter (with timeout to prevent indefinite blocking)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Wait for rate limiter (with configurable timeout to prevent indefinite blocking)
+		ctx, cancel := context.WithTimeout(context.Background(), config.SettingsObj.MeshRateLimiterTimeout)
 		err := s.meshRateLimiter.Wait(ctx)
 		cancel()
 
@@ -577,6 +591,11 @@ func (s *server) processMeshPublishQueue() {
 
 		// Publish the submission (this will acquire semaphore internally)
 		s.publishToMesh(submission)
+
+		// Add small delay to smooth out bursts and prevent overwhelming gossipsub buffers
+		if config.SettingsObj.MeshQueueProcessingDelayMs > 0 {
+			time.Sleep(time.Duration(config.SettingsObj.MeshQueueProcessingDelayMs) * time.Millisecond)
+		}
 	}
 }
 
@@ -702,6 +721,7 @@ func (s *server) publishToMesh(submission *pkgs.SnapshotSubmission) {
 	// Publish the message
 	err = topic.Publish(context.Background(), msgBytes)
 	if err != nil {
+		s.meshPublishFailed.Add(1)
 		log.WithFields(log.Fields{
 			"epoch_id":     submission.Request.EpochId,
 			"project_id":   submission.Request.ProjectId,
@@ -711,6 +731,9 @@ func (s *server) publishToMesh(submission *pkgs.SnapshotSubmission) {
 		}).Error("❌ Failed to publish submission to gossipsub topic")
 		return
 	}
+
+	// Track successful publish (note: this only means message was queued, not delivered)
+	s.meshPublished.Add(1)
 
 	// Get current mesh metrics for logging
 	metrics := s.GetMeshHealthMetrics()

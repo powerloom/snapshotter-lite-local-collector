@@ -64,6 +64,14 @@ type Settings struct {
 	MeshSubmissionBurstSize  int // Burst allowance
 	MaxMeshPublishGoroutines int // Max concurrent mesh publish operations
 	MeshPublishQueueSize     int // Max queued mesh submissions
+
+	// Gossipsub buffer/queue configuration
+	GossipsubValidateQueueSize int // Validation queue size for gossipsub (default: 512)
+	GossipsubValidateWorkers   int // Number of validation workers (default: 8)
+
+	// Queue processing configuration
+	MeshQueueProcessingDelayMs int           // Delay between processing queued messages in ms (default: 10)
+	MeshRateLimiterTimeout     time.Duration // Timeout for rate limiter waits (default: 10s)
 }
 
 func LoadConfig() {
@@ -143,6 +151,14 @@ func LoadConfig() {
 	config.MeshSubmissionBurstSize = getEnvAsInt("MESH_SUBMISSION_BURST_SIZE", 200)
 	config.MaxMeshPublishGoroutines = getEnvAsInt("MAX_MESH_PUBLISH_GOROUTINES", 500)
 	config.MeshPublishQueueSize = getEnvAsInt("MESH_PUBLISH_QUEUE_SIZE", 1000)
+
+	// Gossipsub buffer/queue configuration
+	config.GossipsubValidateQueueSize = getEnvAsInt("GOSSIPSUB_VALIDATE_QUEUE_SIZE", 512)
+	config.GossipsubValidateWorkers = getEnvAsInt("GOSSIPSUB_VALIDATE_WORKERS", 8)
+
+	// Queue processing configuration
+	config.MeshQueueProcessingDelayMs = getEnvAsInt("MESH_QUEUE_PROCESSING_DELAY_MS", 10)
+	config.MeshRateLimiterTimeout = time.Duration(getEnvAsInt("MESH_RATE_LIMITER_TIMEOUT_SEC", 10)) * time.Second
 
 	SettingsObj = &config
 }

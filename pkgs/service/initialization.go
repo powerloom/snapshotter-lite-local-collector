@@ -100,6 +100,10 @@ func InitializeService() error {
 
 		// Message signing policy - consistent with other components
 		pubsub.WithMessageSignaturePolicy(pubsub.StrictSign),
+
+		// Buffer/queue configuration - CRITICAL for preventing message drops under high load
+		pubsub.WithValidateQueueSize(config.SettingsObj.GossipsubValidateQueueSize),
+		pubsub.WithValidateWorkers(config.SettingsObj.GossipsubValidateWorkers),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create pubsub: %w", err)
@@ -107,6 +111,8 @@ func InitializeService() error {
 
 	log.Info("Initialized gossipsub with standardized snapshot submissions mesh parameters")
 	log.Debug("Configuration: Using gossipconfig package with anti-pruning optimizations")
+	log.Infof("Gossipsub buffer configuration: validate queue size=%d, validate workers=%d",
+		config.SettingsObj.GossipsubValidateQueueSize, config.SettingsObj.GossipsubValidateWorkers)
 
 	// Initialize stream pool only if centralized sequencer is enabled
 	if config.SettingsObj.CentralizedSequencerEnabled {
