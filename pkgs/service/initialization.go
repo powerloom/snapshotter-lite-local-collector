@@ -64,6 +64,9 @@ func InitializeService() error {
 	deps.hostConn = P2PHost
 	deps.sequencerID = SequencerID
 
+	// Log local peer ID
+	log.Infof("Local collector peer ID: %s", deps.hostConn.ID().String())
+
 	// Configure DHT for peer discovery
 	deps.dht = ConfigureDHT(context.Background(), deps.hostConn)
 	if deps.dht == nil {
