@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"proto-snapshot-server/config"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	circuitv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -157,6 +159,25 @@ func CreateLibP2pHost() error {
 		libp2p.EnableNATService(),
 		libp2p.EnableHolePunching(),
 		libp2p.Muxer(yamux.ID, yamux.DefaultTransport),
+	}
+
+	// Use private key if provided to maintain consistent peer ID across restarts
+	if config.SettingsObj.LocalCollectorPrivateKey != "" {
+		// Parse hex-encoded Ed25519 private key (128 hex chars = 64 bytes)
+		keyBytes, err := hex.DecodeString(config.SettingsObj.LocalCollectorPrivateKey)
+		if err != nil {
+			log.Warnf("Failed to decode private key from hex: %v, generating new identity", err)
+		} else {
+			privKey, err := crypto.UnmarshalEd25519PrivateKey(keyBytes)
+			if err != nil {
+				log.Warnf("Failed to unmarshal Ed25519 private key: %v, generating new identity", err)
+			} else {
+				opts = append(opts, libp2p.Identity(privKey))
+				log.Info("Using LOCAL_COLLECTOR_PRIVATE_KEY for libp2p identity")
+			}
+		}
+	} else {
+		log.Info("No LOCAL_COLLECTOR_PRIVATE_KEY configured, libp2p will generate a new identity")
 	}
 
 	// Parse bootstrap nodes for AutoRelay (when PUBLIC_IP is not set)

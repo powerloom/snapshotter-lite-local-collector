@@ -12,18 +12,18 @@ import (
 var SettingsObj *Settings
 
 type Settings struct {
-	LogLevel               string
-	SequencerID            string
-	RelayerRendezvousPoint string
-	ClientRendezvousPoint  string
-	RelayerPrivateKey      string
-	PowerloomReportingUrl  string
-	SignerAccountAddress   string
-	PortNumber             string
-	TrustedRelayersListUrl string
-	DataMarketAddress      string
-	MaxStreamPoolSize      int
-	DataMarketInRequest    bool
+	LogLevel                 string
+	SequencerID              string
+	RelayerRendezvousPoint   string
+	ClientRendezvousPoint    string
+	LocalCollectorPrivateKey string
+	PowerloomReportingUrl    string
+	SignerAccountAddress     string
+	PortNumber               string
+	TrustedRelayersListUrl   string
+	DataMarketAddress        string
+	MaxStreamPoolSize        int
+	DataMarketInRequest      bool
 
 	// Gossipsub Configuration
 	GossipsubSnapshotSubmissionPrefix string
@@ -105,7 +105,7 @@ func LoadConfig() {
 	config.HealthCheckPort = getEnvWithDefault("HEALTH_CHECK_PORT", "8080")
 
 	// Load private key from file or env
-	config.RelayerPrivateKey = loadPrivateKey()
+	config.LocalCollectorPrivateKey = loadPrivateKey()
 
 	// Numeric values with defaults
 	config.MaxStreamPoolSize = getEnvAsInt("MAX_STREAM_POOL_SIZE", 100)
@@ -231,6 +231,6 @@ func loadPrivateKey() string {
 	if keyBytes, err := os.ReadFile("/keys/key.txt"); err == nil {
 		return string(keyBytes)
 	}
-	// Fall back to environment variable
-	return os.Getenv("RELAYER_PRIVATE_KEY")
+	// Use LOCAL_COLLECTOR_PRIVATE_KEY (standard environment variable)
+	return os.Getenv("LOCAL_COLLECTOR_PRIVATE_KEY")
 }
