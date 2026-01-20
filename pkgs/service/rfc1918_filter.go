@@ -65,7 +65,6 @@ func FilterRFC1918Multiaddrs(addrs []ma.Multiaddr) ([]ma.Multiaddr, int) {
 
 		if ip != nil && IsReservedIP(ip) {
 			filteredCount++
-			log.Debugf("Filtered out reserved IP address: %s", addr.String())
 			continue
 		}
 
@@ -113,7 +112,7 @@ func (g *RFC1918ConnectionGater) InterceptPeerDial(p peer.ID) (allow bool) {
 // InterceptAddrDial blocks dialing to reserved IP addresses
 func (g *RFC1918ConnectionGater) InterceptAddrDial(pid peer.ID, addr ma.Multiaddr) (allow bool) {
 	if HasRFC1918Address(addr) {
-		log.Debugf("Blocked dial to reserved IP address: %s (peer: %s)", addr.String(), pid.String())
+		// Silently block - this is expected behavior and logging would be too noisy
 		return false
 	}
 	return true
@@ -125,9 +124,8 @@ func (g *RFC1918ConnectionGater) InterceptAddrDial(pid peer.ID, addr ma.Multiadd
 func (g *RFC1918ConnectionGater) InterceptAccept(conn network.ConnMultiaddrs) (allow bool) {
 	remoteAddr := conn.RemoteMultiaddr()
 	if HasRFC1918Address(remoteAddr) {
-		// Silently reject - don't log at debug level to avoid spam
+		// Silently reject - don't log to avoid spam
 		// This prevents TCP RST responses that Hetzner flags as abuse
-		log.Debugf("Blocked incoming connection from reserved IP address: %s", remoteAddr.String())
 		return false
 	}
 	return true
@@ -137,8 +135,7 @@ func (g *RFC1918ConnectionGater) InterceptAccept(conn network.ConnMultiaddrs) (a
 func (g *RFC1918ConnectionGater) InterceptSecured(direction network.Direction, pid peer.ID, conn network.ConnMultiaddrs) (allow bool) {
 	remoteAddr := conn.RemoteMultiaddr()
 	if HasRFC1918Address(remoteAddr) {
-		log.Debugf("Blocked secured connection to reserved IP address: %s (peer: %s, direction: %v)",
-			remoteAddr.String(), pid.String(), direction)
+		// Silently block - this is expected behavior and logging would be too noisy
 		return false
 	}
 	return true
@@ -148,7 +145,7 @@ func (g *RFC1918ConnectionGater) InterceptSecured(direction network.Direction, p
 func (g *RFC1918ConnectionGater) InterceptUpgraded(conn network.Conn) (allow bool, reason control.DisconnectReason) {
 	remoteAddr := conn.RemoteMultiaddr()
 	if HasRFC1918Address(remoteAddr) {
-		log.Debugf("Blocked upgraded connection to reserved IP address: %s", remoteAddr.String())
+		// Silently block - this is expected behavior and logging would be too noisy
 		return false, control.DisconnectReason(0) // No specific reason needed
 	}
 	return true, control.DisconnectReason(0)
