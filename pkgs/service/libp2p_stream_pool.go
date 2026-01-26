@@ -21,12 +21,13 @@ var (
 
 // StreamPool manages a pool of libp2p network streams
 type StreamPool struct {
-	mu          sync.Mutex
-	streams     []network.Stream
-	maxSize     int
-	sequencerID peer.ID
-	reqQueue    chan *reqSlot  // For stream acquisition with identifiers
-	activeOps   sync.WaitGroup // Track active operations
+	mu                sync.Mutex
+	streams           []network.Stream
+	maxSize           int
+	sequencerID       peer.ID
+	reqQueue          chan *reqSlot           // For stream acquisition with identifiers
+	activeOps         sync.WaitGroup          // Track active operations
+	checkedOutStreams map[network.Stream]bool // Track streams currently checked out (for invalidation on connection close)
 }
 
 // streamWithSlot bundles a stream with its request slot
@@ -43,14 +44,20 @@ type reqSlot struct {
 
 // createStream is now a method of StreamPool
 func (p *StreamPool) createStream() (network.Stream, error) {
-	if SequencerHostConn == nil {
+	// Always use current sequencer ID from GetSequencerConnection() to avoid stale ID issues
+	hostConn, seqId, err := GetSequencerConnection()
+	if err != nil {
+		return nil, fmt.Errorf("no sequencer connection available: %w", err)
+	}
+
+	if hostConn == nil {
 		return nil, fmt.Errorf("no sequencer connection available")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), config.SettingsObj.StreamWriteTimeout)
 	defer cancel()
 
-	stream, err := SequencerHostConn.NewStream(ctx, p.sequencerID, "/collect")
+	stream, err := hostConn.NewStream(ctx, seqId, "/collect")
 	if err != nil {
 		return nil, fmt.Errorf("new stream creation failed: %w", err)
 	}
@@ -61,6 +68,15 @@ func (p *StreamPool) createStream() (network.Stream, error) {
 func InitLibp2pStreamPool(maxSize int) error {
 	libp2pStreamPoolMu.Lock()
 	defer libp2pStreamPoolMu.Unlock()
+
+	// Clean up any existing pool first (handles restart scenarios)
+	if libp2pStreamPool != nil {
+		log.Warn("Cleaning up existing stream pool before reinitialization")
+		libp2pStreamPool.Stop()
+		libp2pStreamPool = nil
+		// Give TCP buffers time to drain
+		time.Sleep(2 * time.Second)
+	}
 
 	// Verify connection state
 	_, seqId, err := GetSequencerConnection()
@@ -73,13 +89,16 @@ func InitLibp2pStreamPool(maxSize int) error {
 	createHealthFile()
 
 	pool := &StreamPool{
-		streams:     make([]network.Stream, 0, maxSize),
-		maxSize:     maxSize,
-		sequencerID: seqId,
-		reqQueue:    make(chan *reqSlot, config.SettingsObj.MaxStreamQueueSize),
+		streams:           make([]network.Stream, 0, maxSize),
+		maxSize:           maxSize,
+		sequencerID:       seqId,
+		reqQueue:          make(chan *reqSlot, config.SettingsObj.MaxStreamQueueSize),
+		checkedOutStreams: make(map[network.Stream]bool),
 	}
 
-	// Pre-fill the pool with streams
+	// Pre-fill the pool with streams (with staggered creation to avoid TCP buffer buildup)
+	log.Infof("Pre-filling stream pool (%d streams)...", maxSize)
+	created := 0
 	for i := 0; i < maxSize; i++ {
 		stream, err := pool.createNewStreamWithRetry()
 		if err != nil {
@@ -87,11 +106,23 @@ func InitLibp2pStreamPool(maxSize int) error {
 			continue
 		}
 		pool.streams = append(pool.streams, stream)
+		created++
+
+		// Stagger stream creation to avoid TCP buffer buildup after restart
+		// Only add delay every 10 streams to balance startup time vs buffer pressure
+		if (i+1)%10 == 0 && i < maxSize-1 {
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
 
 	libp2pStreamPool = pool
 	log.Infof("Stream pool initialized with %d/%d streams for sequencer: %s",
-		len(pool.streams), maxSize, seqId.String())
+		created, maxSize, seqId.String())
+
+	if created < maxSize {
+		log.Warnf("Stream pool only filled %d/%d streams - some may be created on-demand", created, maxSize)
+	}
+
 	return nil
 }
 
@@ -166,6 +197,8 @@ func (p *StreamPool) GetStream() (*streamWithSlot, error) {
 			}
 
 			log.Debugf("✨ Retrieved healthy stream from pool [slot: %s, stream: %v]", slot.id, stream.ID())
+			// Track this stream as checked out
+			p.checkedOutStreams[stream] = true
 			return nil
 		}
 
@@ -176,6 +209,8 @@ func (p *StreamPool) GetStream() (*streamWithSlot, error) {
 			return fmt.Errorf("failed to create new stream: %v", err)
 		}
 		stream = newStream
+		// Track this stream as checked out
+		p.checkedOutStreams[stream] = true
 		log.Debugf("✅ Created new stream successfully [slot: %s, stream: %v]", slot.id, stream.ID())
 		return nil
 	}, b)
@@ -197,6 +232,11 @@ func (p *StreamPool) ReleaseStream(sw *streamWithSlot, failed bool) {
 	if sw == nil {
 		return
 	}
+
+	// Remove from checked-out tracking
+	p.mu.Lock()
+	delete(p.checkedOutStreams, sw.stream)
+	p.mu.Unlock()
 
 	if failed {
 		// On failure, cleanup the stream
@@ -222,6 +262,53 @@ func (p *StreamPool) ReleaseStream(sw *streamWithSlot, failed bool) {
 	if sw.slot != nil {
 		<-p.reqQueue
 		log.Debugf("♻️ Released request queue slot [slot: %s, duration: %v]", sw.slot.id, time.Since(sw.slot.createdAt))
+	}
+}
+
+// InvalidateStreamsForConnection invalidates all streams on a given connection
+// Called when connection closes to immediately mark streams as dead
+func (p *StreamPool) InvalidateStreamsForConnection(conn network.Conn) {
+	if conn == nil {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	invalidatedCount := 0
+	targetPeerID := conn.RemotePeer()
+
+	// Invalidate streams in pool - check by peer ID since Conn() may be nil after close
+	for i := len(p.streams) - 1; i >= 0; i-- {
+		stream := p.streams[i]
+		streamConn := stream.Conn()
+		if streamConn != nil && streamConn.RemotePeer() == targetPeerID {
+			stream.Close()
+			p.streams = append(p.streams[:i], p.streams[i+1:]...)
+			invalidatedCount++
+		} else if streamConn == nil {
+			// Stream already has nil connection, remove it
+			stream.Close()
+			p.streams = append(p.streams[:i], p.streams[i+1:]...)
+			invalidatedCount++
+		}
+	}
+
+	// Invalidate checked-out streams (they'll be detected on next use)
+	for stream := range p.checkedOutStreams {
+		streamConn := stream.Conn()
+		if streamConn != nil && streamConn.RemotePeer() == targetPeerID {
+			stream.Reset() // Force reset to fail any pending writes
+			invalidatedCount++
+		} else if streamConn == nil {
+			// Stream already has nil connection, reset it
+			stream.Reset()
+			invalidatedCount++
+		}
+	}
+
+	if invalidatedCount > 0 {
+		log.Warnf("Invalidated %d streams due to connection close (peer: %s)", invalidatedCount, targetPeerID)
 	}
 }
 
@@ -252,19 +339,18 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 		// Get current connection state
 		hostConn, seqId, err := GetSequencerConnection()
 		if err != nil {
-			log.Fatal("Lost connection to sequencer - terminating service for restart")
-			return fmt.Errorf("fatal: sequencer connection lost")
+			return fmt.Errorf("sequencer connection lost: %w", err)
 		}
 
 		if hostConn.Network().Connectedness(seqId) != network.Connected {
-			log.Fatal("Lost connection to sequencer - terminating service for restart")
-			return fmt.Errorf("fatal: connection to sequencer lost")
+			return fmt.Errorf("connection to sequencer lost")
 		}
 
 		stream, err = p.createStream()
 		if err != nil {
 			return fmt.Errorf("stream creation failed: %w", err)
 		}
+
 		return nil
 	}
 
@@ -274,6 +360,7 @@ func (p *StreamPool) createNewStreamWithRetry() (network.Stream, error) {
 
 	err := backoff.Retry(operation, backOff)
 	if err != nil {
+		log.Errorf("Failed to create stream after retries: %v", err)
 		return nil, fmt.Errorf("failed to create stream after retries: %w", err)
 	}
 
@@ -328,8 +415,21 @@ func RebuildStreamPool() error {
 		return fmt.Errorf("cannot rebuild: stream pool not initialized")
 	}
 
-	// Close all existing streams
+	// Verify connection state before rebuilding
+	hostConn, seqId, err := GetSequencerConnection()
+	if err != nil {
+		return fmt.Errorf("cannot rebuild pool: sequencer connection not available: %w", err)
+	}
+
+	if hostConn.Network().Connectedness(seqId) != network.Connected {
+		return fmt.Errorf("cannot rebuild pool: not connected to sequencer %s", seqId)
+	}
+
+	// Update sequencer ID in case it changed
 	libp2pStreamPool.mu.Lock()
+	libp2pStreamPool.sequencerID = seqId
+
+	// Close all existing streams
 	for _, stream := range libp2pStreamPool.streams {
 		if err := stream.Close(); err != nil {
 			log.Warnf("Error closing stream during rebuild: %v", err)
@@ -339,8 +439,33 @@ func RebuildStreamPool() error {
 	// Reset the pool with same capacity
 	maxSize := libp2pStreamPool.maxSize
 	libp2pStreamPool.streams = make([]network.Stream, 0, maxSize)
+	libp2pStreamPool.checkedOutStreams = make(map[network.Stream]bool) // Clear checked-out tracking
 	libp2pStreamPool.mu.Unlock()
 
-	log.Info("Stream pool rebuilt after reconnection")
+	// CRITICAL: Pre-fill the pool with new streams (same as InitLibp2pStreamPool)
+	log.Infof("Pre-filling stream pool after rebuild (%d streams)...", maxSize)
+	created := 0
+	for i := 0; i < maxSize; i++ {
+		stream, err := libp2pStreamPool.createNewStreamWithRetry()
+		if err != nil {
+			log.Errorf("Failed to create stream %d/%d during rebuild: %v", i+1, maxSize, err)
+			continue
+		}
+		libp2pStreamPool.mu.Lock()
+		libp2pStreamPool.streams = append(libp2pStreamPool.streams, stream)
+		libp2pStreamPool.mu.Unlock()
+		created++
+
+		// Stagger stream creation to avoid TCP buffer buildup
+		if (i+1)%10 == 0 && i < maxSize-1 {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	log.Infof("Stream pool rebuilt with %d/%d streams for sequencer: %s", created, maxSize, seqId.String())
+	if created < maxSize {
+		log.Warnf("Stream pool only filled %d/%d streams during rebuild - some may be created on-demand", created, maxSize)
+	}
+
 	return nil
 }

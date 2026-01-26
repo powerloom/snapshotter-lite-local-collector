@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"proto-snapshot-server/config"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	circuitv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -25,13 +27,15 @@ import (
 )
 
 var (
-	SequencerHostConn    host.Host
+	P2PHost              host.Host
 	SequencerID          peer.ID
 	sequencerMu          sync.RWMutex
 	ConnManager          *connmgr.BasicConnMgr
 	TcpAddr              ma.Multiaddr
 	rm                   network.ResourceManager
 	connectionRefreshing atomic.Bool
+	lastAllConnLostLog   time.Time // Throttle "all connections lost" error logs
+	allConnLostLogMu     sync.Mutex
 )
 
 // Thread-safe getter for connection state
@@ -39,11 +43,11 @@ func GetSequencerConnection() (host.Host, peer.ID, error) {
 	sequencerMu.RLock()
 	defer sequencerMu.RUnlock()
 
-	if SequencerHostConn == nil || SequencerID.String() == "" {
+	if P2PHost == nil || SequencerID.String() == "" {
 		return nil, "", fmt.Errorf("sequencer connection not established")
 	}
 
-	return SequencerHostConn, SequencerID, nil
+	return P2PHost, SequencerID, nil
 }
 
 func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
@@ -74,12 +78,28 @@ func ConnectToSequencerP2P(relayers []Relayer, p2pHost host.Host) bool {
 
 func CreateLibP2pHost() error {
 	var err error
-	TcpAddr, _ = ma.NewMultiaddr("/ip4/0.0.0.0/tcp/9000")
+	TcpAddr, _ = ma.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%s", config.SettingsObj.LocalCollectorP2PPort))
+
+	// Use configurable connection manager limits (defaults match DSV nodes: 1000/4000)
+	// CRITICAL: Use very permissive limits to prevent aggressive pruning
+	// LowWater=1 means we'll never prune when we have at least 1 connection
+	// HighWater=1000 means we'll only prune if we somehow get 1000+ connections
+	// This prevents the connection manager from closing connections when we have few peers
+	// The exact 1-hour pruning issue suggests connection manager is being too aggressive
+	connLowWater := config.SettingsObj.ConnManagerLowWater
+	connHighWater := config.SettingsObj.ConnManagerHighWater
+	if connLowWater == 0 {
+		connLowWater = 1 // Very low default - never prune when we have at least 1 connection
+	}
+	if connHighWater == 0 {
+		connHighWater = 1000 // High default - only prune if we get 1000+ connections
+	}
 
 	ConnManager, _ = connmgr.NewConnManager(
-		40960,
-		81920,
+		connLowWater,
+		connHighWater,
 		connmgr.WithGracePeriod(1*time.Minute))
+	log.Infof("Connection manager configured: LowWater=%d, HighWater=%d (permissive mode to prevent 1-hour pruning)", connLowWater, connHighWater)
 
 	scalingLimits := rcmgr.DefaultLimits
 
@@ -94,7 +114,17 @@ func CreateLibP2pHost() error {
 			Streams:         rcmgr.Unlimited,
 			Conns:           rcmgr.Unlimited,
 			ConnsOutbound:   rcmgr.Unlimited,
-			ConnsInbound:    rcmgr.Unlimited,
+			ConnsInbound:    rcmgr.Unlimited, // Allow many inbound connections
+			FD:              rcmgr.Unlimited,
+			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
+		},
+		Transient: rcmgr.ResourceLimits{
+			StreamsOutbound: rcmgr.Unlimited,
+			StreamsInbound:  rcmgr.Unlimited,
+			Streams:         rcmgr.Unlimited,
+			Conns:           rcmgr.Unlimited,
+			ConnsOutbound:   rcmgr.Unlimited,
+			ConnsInbound:    rcmgr.Unlimited, // Allow transient inbound connections
 			FD:              rcmgr.Unlimited,
 			Memory:          rcmgr.LimitVal64(rcmgr.Unlimited),
 		},
@@ -111,9 +141,14 @@ func CreateLibP2pHost() error {
 		return err
 	}
 
-	SequencerHostConn, err = libp2p.New(
+	// Create RFC1918 connection gater to block private IP connections
+	// This is required by Hetzner to prevent scanning of internal networks
+	rfc1918Gater := &RFC1918ConnectionGater{}
+
+	opts := []libp2p.Option{
 		libp2p.EnableRelay(),
 		libp2p.ConnectionManager(ConnManager),
+		libp2p.ConnectionGater(rfc1918Gater), // Block RFC1918 connections at dial level
 		libp2p.ListenAddrs(TcpAddr),
 		libp2p.ResourceManager(rm),
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
@@ -123,12 +158,152 @@ func CreateLibP2pHost() error {
 		libp2p.EnableRelayService(),
 		libp2p.EnableNATService(),
 		libp2p.EnableHolePunching(),
-		libp2p.Muxer(yamux.ID, yamux.DefaultTransport))
+		libp2p.Muxer(yamux.ID, yamux.DefaultTransport),
+	}
+
+	// Use private key if provided to maintain consistent peer ID across restarts
+	if config.SettingsObj.LocalCollectorPrivateKey != "" {
+		// Parse hex-encoded Ed25519 private key (128 hex chars = 64 bytes)
+		keyBytes, err := hex.DecodeString(config.SettingsObj.LocalCollectorPrivateKey)
+		if err != nil {
+			log.Warnf("Failed to decode private key from hex: %v, generating new identity", err)
+		} else {
+			privKey, err := crypto.UnmarshalEd25519PrivateKey(keyBytes)
+			if err != nil {
+				log.Warnf("Failed to unmarshal Ed25519 private key: %v, generating new identity", err)
+			} else {
+				opts = append(opts, libp2p.Identity(privKey))
+				log.Info("Using LOCAL_COLLECTOR_PRIVATE_KEY for libp2p identity")
+			}
+		}
+	} else {
+		log.Info("No LOCAL_COLLECTOR_PRIVATE_KEY configured, libp2p will generate a new identity")
+	}
+
+	// Parse bootstrap nodes for AutoRelay (when PUBLIC_IP is not set)
+	var staticRelays []peer.AddrInfo
+	if config.SettingsObj.PublicIP == "" && len(config.SettingsObj.BootstrapNodeAddrs) > 0 {
+		for _, bootstrapAddr := range config.SettingsObj.BootstrapNodeAddrs {
+			if bootstrapAddr == "" {
+				continue
+			}
+			peerMA, err := ma.NewMultiaddr(bootstrapAddr)
+			if err != nil {
+				log.Debugf("Failed to parse bootstrap addr for AutoRelay: %v", err)
+				continue
+			}
+			// Skip RFC1918 addresses
+			if HasRFC1918Address(peerMA) {
+				continue
+			}
+			peerInfo, err := peer.AddrInfoFromP2pAddr(peerMA)
+			if err != nil {
+				log.Debugf("Failed to parse bootstrap peer info for AutoRelay: %v", err)
+				continue
+			}
+			// Filter RFC1918 addresses from peer info
+			if len(peerInfo.Addrs) > 0 {
+				filteredAddrs, _ := FilterRFC1918Multiaddrs(peerInfo.Addrs)
+				if len(filteredAddrs) == 0 {
+					continue
+				}
+				peerInfo.Addrs = filteredAddrs
+			}
+			staticRelays = append(staticRelays, *peerInfo)
+		}
+		if len(staticRelays) > 0 {
+			opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(staticRelays))
+			log.Infof("AutoRelay enabled with %d bootstrap nodes as static relays (PUBLIC_IP not set)", len(staticRelays))
+		}
+	}
+
+	// Add public IP address if configured (like DSV nodes do)
+	// This ensures we advertise the correct public IP and port in DHT
+	if config.SettingsObj.PublicIP != "" {
+		publicAddr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", config.SettingsObj.PublicIP, config.SettingsObj.LocalCollectorP2PPort))
+		if err != nil {
+			log.Errorf("Failed to create public multiaddr: %v", err)
+		} else {
+			opts = append(opts, libp2p.AddrsFactory(func(addrs []ma.Multiaddr) []ma.Multiaddr {
+				// Add the public address to the list - this is what gets advertised in DHT
+				return append(addrs, publicAddr)
+			}))
+			log.Debugf("Advertising public IP %s on port %s in DHT", config.SettingsObj.PublicIP, config.SettingsObj.LocalCollectorP2PPort)
+		}
+	}
+
+	P2PHost, err = libp2p.New(opts...)
 
 	if err != nil {
 		log.Debugln("Error instantiating libp2p host: ", err.Error())
 		return err
 	}
+
+	P2PHost.Network().Notify(&network.NotifyBundle{
+		ConnectedF: func(_ network.Network, conn network.Conn) {
+			totalConnections := len(P2PHost.Network().Peers())
+			log.Debugf("🔌 P2P peer connected: %s, Addr: %s, Total connections: %d",
+				conn.RemotePeer(), conn.RemoteMultiaddr(), totalConnections)
+			// Tag all incoming connections to protect them from pruning
+			// This ensures peers that connect to us (not just ones we discover) are protected
+			if ConnManager != nil {
+				ConnManager.TagPeer(conn.RemotePeer(), "inbound-peer", 25) // Low priority but still protected
+				log.Debugf("Tagged peer %s with 'inbound-peer' tag", conn.RemotePeer())
+			}
+		},
+		DisconnectedF: func(_ network.Network, conn network.Conn) {
+			totalConnections := len(P2PHost.Network().Peers())
+
+			// CRITICAL: Immediately invalidate all streams on this connection
+			// This prevents dead streams from being used after connection closes
+			// Only do this if centralized sequencer is enabled
+			if config.SettingsObj.CentralizedSequencerEnabled {
+				pool := GetLibp2pStreamPool()
+				if pool != nil && conn.RemotePeer() == SequencerID {
+					pool.InvalidateStreamsForConnection(conn)
+				}
+			}
+
+			// NOTE: Direction tells us who INITIATED the connection, not who closed it
+			// DirOutbound = we dialed them (we initiated connection)
+			// DirInbound = they dialed us (peer initiated connection)
+			// We cannot determine who closed the connection from Direction alone
+			connectionDirection := "unknown"
+			weInitiatedConnection := false
+			if conn.Stat().Direction == network.DirOutbound {
+				connectionDirection = "outbound (we dialed them)"
+				weInitiatedConnection = true
+			} else if conn.Stat().Direction == network.DirInbound {
+				connectionDirection = "inbound (they dialed us)"
+				weInitiatedConnection = false
+			}
+
+			log.Debugf("🔌 P2P peer disconnected: %s, Addr: %s, Connection was: %s, Remaining connections: %d",
+				conn.RemotePeer(), conn.RemoteMultiaddr(), connectionDirection, totalConnections)
+
+			// Log if this is a critical disconnection (mesh peer or last connection)
+			// Throttle logging to prevent spam when multiple connections disconnect simultaneously
+			if totalConnections == 0 {
+				allConnLostLogMu.Lock()
+				shouldLog := time.Since(lastAllConnLostLog) > 1*time.Minute
+				if shouldLog {
+					lastAllConnLostLog = time.Now()
+					allConnLostLogMu.Unlock()
+					log.Error("🚨 CRITICAL: All connections lost! Cannot determine who closed them from Direction alone - could be connection manager, network issue, or peer-initiated")
+				} else {
+					allConnLostLogMu.Unlock()
+					log.Debugf("All connections lost (throttled log - last logged %v ago)", time.Since(lastAllConnLostLog))
+				}
+			}
+
+			// Track disconnection for diagnostics (used in Slack alerts)
+			// Note: weInitiatedConnection means we initiated the CONNECTION, not the disconnect
+			if deps.serverInstance != nil {
+				deps.serverInstance.recordDisconnection(weInitiatedConnection)
+			}
+		},
+	})
+
 	return nil
 }
 
@@ -138,23 +313,19 @@ func EstablishSequencerConnection() error {
 	sequencerMu.Lock()
 	defer sequencerMu.Unlock()
 
-	// Clear existing connection if any
-	if SequencerHostConn != nil {
-		if err := SequencerHostConn.Close(); err != nil {
-			log.Warnf("Error closing existing connection: %v", err)
+	// CRITICAL: Only create host if it doesn't exist
+	// DO NOT close existing host - it's shared with gossipsub!
+	// Closing the host would kill all gossipsub connections
+	if P2PHost == nil {
+		// 1. Create properly configured host (only if it doesn't exist)
+		if err := CreateLibP2pHost(); err != nil {
+			return fmt.Errorf("failed to create libp2p host: %w", err)
 		}
-		// Important: Signal that connection is being reset
-		// This should trigger cleanup of existing stream pool
-		SequencerHostConn = nil
-		SequencerID = ""
+		// Update deps.hostConn if gossipsub hasn't been initialized yet
+		if deps.hostConn == nil {
+			deps.hostConn = P2PHost
+		}
 	}
-
-	// 1. Create properly configured host
-	if err := CreateLibP2pHost(); err != nil {
-		return fmt.Errorf("failed to create libp2p host: %w", err)
-	}
-
-	// No need to reassign SequencerHostConn as it's already set in CreateLibP2pHost()
 
 	// 2. Get sequencer info
 	sequencer, err := fetchSequencer(
@@ -176,17 +347,33 @@ func EstablishSequencerConnection() error {
 		return fmt.Errorf("failed to get addr info: %w", err)
 	}
 
-	// 4. Set sequencer ID
+	// 4. Check if we're already connected to the right sequencer
+	if SequencerID == sequencerInfo.ID {
+		// Check connection status
+		if P2PHost.Network().Connectedness(SequencerID) == network.Connected {
+			log.Debugf("Already connected to sequencer %s, skipping refresh", SequencerID)
+			return nil
+		}
+	}
+
+	// 5. Close ONLY the sequencer connection (not the entire host!)
+	if SequencerID != "" && P2PHost != nil {
+		if err := P2PHost.Network().ClosePeer(SequencerID); err != nil {
+			log.Debugf("Error closing connection to previous sequencer: %v", err)
+		}
+	}
+
+	// 6. Set sequencer ID
 	SequencerID = sequencerInfo.ID
 	if SequencerID.String() == "" {
 		return fmt.Errorf("empty sequencer ID")
 	}
 
-	// 5. Establish connection with timeout
+	// 7. Establish connection with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := SequencerHostConn.Connect(ctx, *sequencerInfo); err != nil {
+	if err := P2PHost.Connect(ctx, *sequencerInfo); err != nil {
 		return fmt.Errorf("failed to connect to sequencer: %w", err)
 	}
 
@@ -203,6 +390,12 @@ func StartConnectionRefreshLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Skip connection refresh if centralized sequencer is disabled
+			if !config.SettingsObj.CentralizedSequencerEnabled {
+				log.Debug("Skipping connection refresh - centralized sequencer disabled")
+				continue
+			}
+
 			log.Info("🔄 Starting periodic connection refresh cycle")
 
 			connectionRefreshing.Store(true)
@@ -271,9 +464,15 @@ func StartConnectionRefreshLoop(ctx context.Context) {
 			}
 			log.Info("✅ New connection established successfully")
 
+			// Small delay to ensure connection is fully established before rebuilding pool
+			time.Sleep(500 * time.Millisecond)
+
 			log.Info("🏊 Rebuilding stream pool")
 			if err := RebuildStreamPool(); err != nil {
 				log.Errorf("❌ Failed to rebuild stream pool: %v", err)
+				// Don't continue - connection refresh failed, streams will be created on-demand
+				connectionRefreshing.Store(false)
+				continue
 			}
 
 			connectionRefreshing.Store(false)

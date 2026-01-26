@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -11,18 +12,21 @@ import (
 var SettingsObj *Settings
 
 type Settings struct {
-	LogLevel               string
-	SequencerID            string
-	RelayerRendezvousPoint string
-	ClientRendezvousPoint  string
-	RelayerPrivateKey      string
-	PowerloomReportingUrl  string
-	SignerAccountAddress   string
-	PortNumber             string
-	TrustedRelayersListUrl string
-	DataMarketAddress      string
-	MaxStreamPoolSize      int
-	DataMarketInRequest    bool
+	LogLevel                 string
+	SequencerID              string
+	RelayerRendezvousPoint   string
+	ClientRendezvousPoint    string
+	LocalCollectorPrivateKey string
+	PowerloomReportingUrl    string
+	SignerAccountAddress     string
+	PortNumber               string
+	TrustedRelayersListUrl   string
+	DataMarketAddress        string
+	MaxStreamPoolSize        int
+	DataMarketInRequest      bool
+
+	// Gossipsub Configuration
+	GossipsubSnapshotSubmissionPrefix string
 
 	// Stream Pool Configuration
 	StreamHealthCheckTimeout time.Duration
@@ -34,6 +38,40 @@ type Settings struct {
 
 	// Connection management settings
 	ConnectionRefreshInterval time.Duration
+	BootstrapNodeAddr         string   // Legacy single bootstrap node (for backward compatibility)
+	BootstrapNodeAddrs        []string // New multiple bootstrap nodes support
+	LocalCollectorP2PPort     string
+	RendezvousPoint           string
+	ConnManagerLowWater       int
+	ConnManagerHighWater      int
+	PublicIP                  string
+	DSVRendezvousPoint        string
+
+	// Semaphore acquisition timeout
+	WriteSemaphoreTimeout time.Duration
+
+	// Alerting configuration
+	SlackWebhookURL string
+
+	// Health check server port
+	HealthCheckPort string
+
+	// Centralized sequencer configuration
+	CentralizedSequencerEnabled bool
+
+	// Mesh submission concurrency controls
+	MeshSubmissionRateLimit  int // Max submissions per second
+	MeshSubmissionBurstSize  int // Burst allowance
+	MaxMeshPublishGoroutines int // Max concurrent mesh publish operations
+	MeshPublishQueueSize     int // Max queued mesh submissions
+
+	// Gossipsub buffer/queue configuration
+	GossipsubValidateQueueSize int // Validation queue size for gossipsub (default: 512)
+	GossipsubValidateWorkers   int // Number of validation workers (default: 8)
+
+	// Queue processing configuration
+	MeshQueueProcessingDelayMs int           // Delay between processing queued messages in ms (default: 10)
+	MeshRateLimiterTimeout     time.Duration // Timeout for rate limiter waits (default: 10s)
 }
 
 func LoadConfig() {
@@ -45,6 +83,8 @@ func LoadConfig() {
 	} else {
 		config.PortNumber = "50051" // Default value
 	}
+	config.RendezvousPoint = getEnvWithDefault("RENDEZVOUS_POINT", "powerloom-snapshot-sequencer-network")
+	config.GossipsubSnapshotSubmissionPrefix = getEnvWithDefault("GOSSIPSUB_SNAPSHOT_SUBMISSION_PREFIX", "/powerloom/snapshot-submissions")
 
 	if contract := os.Getenv("DATA_MARKET_CONTRACT"); contract == "" {
 		log.Fatal("DATA_MARKET_CONTRACT environment variable is required")
@@ -60,16 +100,27 @@ func LoadConfig() {
 	config.PowerloomReportingUrl = os.Getenv("POWERLOOM_REPORTING_URL")
 	config.SignerAccountAddress = os.Getenv("SIGNER_ACCOUNT_ADDRESS")
 	config.TrustedRelayersListUrl = getEnvWithDefault("TRUSTED_RELAYERS_LIST_URL", "https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/relayers.json")
+	config.SlackWebhookURL = os.Getenv("SLACK_WEBHOOK_URL")
+	// Health check port - read from HEALTH_CHECK_PORT (set by docker-compose from LOCAL_COLLECTOR_HEALTH_CHECK_PORT)
+	config.HealthCheckPort = getEnvWithDefault("HEALTH_CHECK_PORT", "8080")
 
 	// Load private key from file or env
-	config.RelayerPrivateKey = loadPrivateKey()
+	config.LocalCollectorPrivateKey = loadPrivateKey()
 
 	// Numeric values with defaults
 	config.MaxStreamPoolSize = getEnvAsInt("MAX_STREAM_POOL_SIZE", 100)
 	config.StreamHealthCheckTimeout = time.Duration(getEnvAsInt("STREAM_HEALTH_CHECK_TIMEOUT_MS", 5000)) * time.Millisecond
 	config.StreamWriteTimeout = time.Duration(getEnvAsInt("STREAM_WRITE_TIMEOUT_MS", 5000)) * time.Millisecond
 	config.MaxWriteRetries = getEnvAsInt("MAX_WRITE_RETRIES", 5)
-	config.MaxConcurrentWrites = getEnvAsInt("MAX_CONCURRENT_WRITES", 100)
+	// MaxConcurrentWrites defaults to MaxStreamPoolSize if not explicitly set
+	// This ensures write capacity matches available streams
+	if os.Getenv("MAX_CONCURRENT_WRITES") == "" {
+		// Not set, default to stream pool size
+		config.MaxConcurrentWrites = config.MaxStreamPoolSize
+		log.Infof("MAX_CONCURRENT_WRITES not set, defaulting to MAX_STREAM_POOL_SIZE (%d)", config.MaxConcurrentWrites)
+	} else {
+		config.MaxConcurrentWrites = getEnvAsInt("MAX_CONCURRENT_WRITES", config.MaxStreamPoolSize)
+	}
 	config.MaxStreamQueueSize = getEnvAsInt("MAX_STREAM_QUEUE_SIZE", 1000)
 	config.WorkerPoolSize = getEnvAsInt("WORKER_POOL_SIZE", 250)
 
@@ -78,6 +129,36 @@ func LoadConfig() {
 
 	// Add connection refresh interval setting (default 5 minutes)
 	config.ConnectionRefreshInterval = time.Duration(getEnvAsInt("CONNECTION_REFRESH_INTERVAL_SEC", 300)) * time.Second
+
+	// Load bootstrap nodes with backward compatibility
+	loadBootstrapNodes(&config)
+
+	config.LocalCollectorP2PPort = getEnvWithDefault("LOCAL_COLLECTOR_P2P_PORT", "9100")
+
+	config.ConnManagerLowWater = getEnvAsInt("CONN_MANAGER_LOW_WATER", 10000)
+	config.ConnManagerHighWater = getEnvAsInt("CONN_MANAGER_HIGH_WATER", 40000)
+	config.PublicIP = os.Getenv("PUBLIC_IP")
+	config.DSVRendezvousPoint = config.RendezvousPoint // Use the same RENDEZVOUS_POINT for DSV discovery
+
+	// Add write semaphore timeout (default 5 seconds)
+	config.WriteSemaphoreTimeout = time.Duration(getEnvAsInt("WRITE_SEMAPHORE_TIMEOUT_SEC", 5)) * time.Second
+
+	// Centralized sequencer configuration (default: enabled)
+	config.CentralizedSequencerEnabled = getEnvAsBool("CENTRALIZED_SEQUENCER_ENABLED", true)
+
+	// Mesh submission concurrency controls
+	config.MeshSubmissionRateLimit = getEnvAsInt("MESH_SUBMISSION_RATE_LIMIT", 100)
+	config.MeshSubmissionBurstSize = getEnvAsInt("MESH_SUBMISSION_BURST_SIZE", 200)
+	config.MaxMeshPublishGoroutines = getEnvAsInt("MAX_MESH_PUBLISH_GOROUTINES", 500)
+	config.MeshPublishQueueSize = getEnvAsInt("MESH_PUBLISH_QUEUE_SIZE", 1000)
+
+	// Gossipsub buffer/queue configuration
+	config.GossipsubValidateQueueSize = getEnvAsInt("GOSSIPSUB_VALIDATE_QUEUE_SIZE", 512)
+	config.GossipsubValidateWorkers = getEnvAsInt("GOSSIPSUB_VALIDATE_WORKERS", 8)
+
+	// Queue processing configuration
+	config.MeshQueueProcessingDelayMs = getEnvAsInt("MESH_QUEUE_PROCESSING_DELAY_MS", 10)
+	config.MeshRateLimiterTimeout = time.Duration(getEnvAsInt("MESH_RATE_LIMITER_TIMEOUT_SEC", 10)) * time.Second
 
 	SettingsObj = &config
 }
@@ -99,11 +180,57 @@ func getEnvAsInt(key string, defaultValue int) int {
 	return defaultValue
 }
 
+func getEnvAsBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolVal, err := strconv.ParseBool(value); err == nil {
+			return boolVal
+		}
+		log.Warnf("Invalid value for %s, using default: %v", key, defaultValue)
+	}
+	return defaultValue
+}
+
+// GetSnapshotSubmissionTopics returns the discovery and submissions topic names
+func (s *Settings) GetSnapshotSubmissionTopics() (discoveryTopic, submissionsTopic string) {
+	discoveryTopic = s.GossipsubSnapshotSubmissionPrefix + "/0"
+	submissionsTopic = s.GossipsubSnapshotSubmissionPrefix + "/all"
+	return discoveryTopic, submissionsTopic
+}
+
+func loadBootstrapNodes(config *Settings) {
+	// Try BOOTSTRAP_NODE_ADDRS first (comma-separated)
+	bootstrapAddrsStr := os.Getenv("BOOTSTRAP_NODE_ADDRS")
+	if bootstrapAddrsStr != "" {
+		// Parse comma-separated addresses
+		addresses := strings.Split(bootstrapAddrsStr, ",")
+		for i, addr := range addresses {
+			addresses[i] = strings.TrimSpace(addr)
+			if addresses[i] != "" {
+				config.BootstrapNodeAddrs = append(config.BootstrapNodeAddrs, addresses[i])
+			}
+		}
+
+		if len(config.BootstrapNodeAddrs) > 0 {
+			log.Infof("Loaded %d bootstrap nodes from BOOTSTRAP_NODE_ADDRS", len(config.BootstrapNodeAddrs))
+		}
+	}
+
+	// Fallback to legacy BOOTSTRAP_NODE_ADDR for backward compatibility
+	if len(config.BootstrapNodeAddrs) == 0 {
+		singleAddr := os.Getenv("BOOTSTRAP_NODE_ADDR")
+		if singleAddr != "" {
+			config.BootstrapNodeAddr = singleAddr
+			config.BootstrapNodeAddrs = []string{singleAddr}
+			log.Info("Using legacy BOOTSTRAP_NODE_ADDR for backward compatibility")
+		}
+	}
+}
+
 func loadPrivateKey() string {
 	// Try loading from file first
 	if keyBytes, err := os.ReadFile("/keys/key.txt"); err == nil {
 		return string(keyBytes)
 	}
-	// Fall back to environment variable
-	return os.Getenv("RELAYER_PRIVATE_KEY")
+	// Use LOCAL_COLLECTOR_PRIVATE_KEY (standard environment variable)
+	return os.Getenv("LOCAL_COLLECTOR_PRIVATE_KEY")
 }
