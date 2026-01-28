@@ -54,7 +54,7 @@ func InitializeService() error {
 		}
 	}
 
-	// Verify P2P host is initialized
+	// Verify connection state
 	if P2PHost == nil {
 		return fmt.Errorf("P2P host not initialized")
 	}
@@ -66,11 +66,9 @@ func InitializeService() error {
 		if err := EstablishSequencerConnection(); err != nil {
 			return fmt.Errorf("failed to establish sequencer connection: %w", err)
 		}
-
 		if SequencerID.String() == "" {
 			return fmt.Errorf("sequencer ID not initialized")
 		}
-
 		deps.sequencerID = SequencerID
 		log.Info("Centralized sequencer connection established")
 	} else {
@@ -146,9 +144,9 @@ func InitializeService() error {
 	deps.initialized = true
 
 	if config.SettingsObj.CentralizedSequencerEnabled {
-		log.Infof("Service initialization complete with sequencer ID: %s", deps.sequencerID.String())
+		log.Info("Service initialization complete with sequencer ID: ", deps.sequencerID.String())
 	} else {
-		log.Info("Service initialization complete (centralized sequencer disabled, using mesh-only submissions)")
+		log.Info("Service initialization complete (mesh-only mode, centralized sequencer disabled)")
 	}
 	return nil
 }
