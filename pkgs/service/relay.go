@@ -327,6 +327,13 @@ func EstablishSequencerConnection() error {
 		}
 	}
 
+	// When centralized sequencer is disabled, only the P2P host is needed for gossipsub.
+	// Skip sequencer fetch and connection (dsv-p2p behavior).
+	if !config.SettingsObj.CentralizedSequencerEnabled {
+		log.Info("Centralized sequencer disabled - P2P host created for mesh-only mode")
+		return nil
+	}
+
 	// 2. Get sequencer info
 	sequencer, err := fetchSequencer(
 		"https://raw.githubusercontent.com/PowerLoom/snapshotter-lite-local-collector/feat/trusted-relayers/sequencers.json",

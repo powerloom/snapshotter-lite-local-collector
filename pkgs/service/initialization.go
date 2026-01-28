@@ -52,12 +52,13 @@ func InitializeService() error {
 		return fmt.Errorf("failed to establish sequencer connection: %w", err)
 	}
 
-	// Verify connection state
+	// Verify connection state: P2P host is always required (for gossipsub).
 	if P2PHost == nil {
 		return fmt.Errorf("P2P host not initialized")
 	}
 
-	if SequencerID.String() == "" {
+	// Sequencer ID is only required when centralized sequencer is enabled.
+	if config.SettingsObj.CentralizedSequencerEnabled && SequencerID.String() == "" {
 		return fmt.Errorf("sequencer ID not initialized")
 	}
 
@@ -131,6 +132,10 @@ func InitializeService() error {
 
 	deps.initialized = true
 
-	log.Info("Service initialization complete with sequencer ID: ", deps.sequencerID.String())
+	if config.SettingsObj.CentralizedSequencerEnabled {
+		log.Info("Service initialization complete with sequencer ID: ", deps.sequencerID.String())
+	} else {
+		log.Info("Service initialization complete (mesh-only mode, centralized sequencer disabled)")
+	}
 	return nil
 }
