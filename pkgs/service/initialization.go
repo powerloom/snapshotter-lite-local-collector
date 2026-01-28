@@ -47,23 +47,34 @@ func InitializeService() error {
 	logging.SetAllLoggers(logging.LevelInfo)
 	logger.Debug("Libp2p logging set to info level")
 
-	// Establish sequencer connection
-	if err := EstablishSequencerConnection(); err != nil {
-		return fmt.Errorf("failed to establish sequencer connection: %w", err)
+	// Always create P2P host (needed for gossipsub mesh submissions)
+	if P2PHost == nil {
+		if err := CreateLibP2pHost(); err != nil {
+			return fmt.Errorf("failed to create libp2p host: %w", err)
+		}
 	}
 
-	// Verify connection state: P2P host is always required (for gossipsub).
+	// Verify connection state
 	if P2PHost == nil {
 		return fmt.Errorf("P2P host not initialized")
 	}
 
-	// Sequencer ID is only required when centralized sequencer is enabled.
-	if config.SettingsObj.CentralizedSequencerEnabled && SequencerID.String() == "" {
-		return fmt.Errorf("sequencer ID not initialized")
-	}
-
 	deps.hostConn = P2PHost
-	deps.sequencerID = SequencerID
+
+	// Only establish sequencer connection if centralized sequencer is enabled
+	if config.SettingsObj.CentralizedSequencerEnabled {
+		if err := EstablishSequencerConnection(); err != nil {
+			return fmt.Errorf("failed to establish sequencer connection: %w", err)
+		}
+		if SequencerID.String() == "" {
+			return fmt.Errorf("sequencer ID not initialized")
+		}
+		deps.sequencerID = SequencerID
+		log.Info("Centralized sequencer connection established")
+	} else {
+		log.Info("Centralized sequencer disabled - skipping sequencer connection")
+		// sequencerID will remain as zero value (empty peer.ID)
+	}
 
 	// Log local peer ID
 	log.Infof("Local collector peer ID: %s", deps.hostConn.ID().String())
