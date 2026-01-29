@@ -144,7 +144,9 @@ func LoadConfig() {
 	config.WriteSemaphoreTimeout = time.Duration(getEnvAsInt("WRITE_SEMAPHORE_TIMEOUT_SEC", 5)) * time.Second
 
 	// Centralized sequencer configuration (default: enabled)
+	envValue := os.Getenv("CENTRALIZED_SEQUENCER_ENABLED")
 	config.CentralizedSequencerEnabled = getEnvAsBool("CENTRALIZED_SEQUENCER_ENABLED", true)
+	log.Infof("🔍 CENTRALIZED_SEQUENCER_ENABLED env value: '%s', parsed as: %v", envValue, config.CentralizedSequencerEnabled)
 
 	// Mesh submission concurrency controls
 	config.MeshSubmissionRateLimit = getEnvAsInt("MESH_SUBMISSION_RATE_LIMIT", 100)
