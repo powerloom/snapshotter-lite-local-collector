@@ -1240,6 +1240,22 @@ func (s *server) discoverDSVPeers(ctx context.Context, routingDiscovery *routing
 // Uses two different message types:
 // 1. Discovery topic (/0): Lightweight heartbeat with nil submissions (recognized and skipped by DSV)
 // 2. Submissions topic (/all): Test submission with empty CID (recognized as heartbeat but helps mesh formation)
+//
+// TODO: [SIGNED-HEARTBEATS] Add EIP-712 signing to heartbeat messages to enable:
+// 1. DSV node can verify heartbeat authenticity and extract snapshotter address
+// 2. Peer ID -> snapshotter address mapping for continuous identity verification
+// 3. Banning mechanism for peers sending unsigned/invalid heartbeats
+// Requires: Access to snapshotter private key (via gRPC from snapshotter node or env var)
+// See: decentralized-sequencer/pkgs/submissions/dequeuer.go validateSubmission()
+//
+// CURRENT IMPLEMENTATION (peer-ID-only tracking):
+// DSV node caches heartbeats by peer ID only (no snapshotter address extraction).
+// Operators can correlate peer ID with snapshotter address using other EIP-712 signed data:
+//   - Simulation messages: /api/v1/simulations/recent
+//   - Regular submissions: /api/v1/epochs/{epochID}/submissions
+//
+// Then query /api/v1/heartbeats/peer/{peerID} to view heartbeat activity for that peer.
+// This approach avoids the complexity of passing private keys to the Go local-collector.
 func (s *server) publishHeartbeats() {
 	// CRITICAL: Send messages frequently to maintain active status and help mesh formation
 	ticker := time.NewTicker(10 * time.Second) // Send every 10 seconds
