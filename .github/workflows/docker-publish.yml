@@ -9,11 +9,11 @@ on:
   release:
     types: ['published']
   push:
-    branches: [ "main", "dockerify", "experimental"]
+    branches: [ "main", "master", "dockerify", "experimental" ]
     # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
 
 env:
   # Use docker.io for Docker Hub if empty
