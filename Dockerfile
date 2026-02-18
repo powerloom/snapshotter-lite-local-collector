@@ -7,13 +7,17 @@ WORKDIR /app
 COPY go.mod go.sum ./
 
 # Download the dependencies
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
 
 # Copy the rest of the application code to the working directory
 COPY . .
 
 # Build the Go application
-RUN CGO_ENABLED=0 GOOS=linux go build -o /snapshotter-local-collector ./cmd/main.go
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -o /snapshotter-local-collector ./cmd/main.go
 
 # Use alpine base image for healthcheck tools (curl)
 FROM alpine:latest
