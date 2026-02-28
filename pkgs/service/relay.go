@@ -218,17 +218,20 @@ func CreateLibP2pHost() error {
 	}
 
 	// Add public IP address if configured (like DSV nodes do)
-	// This ensures we advertise the correct public IP and port in DHT
+	// This ensures we advertise the correct public IP and port in DHT/gossipsub
+	// CRITICAL: Filter out internal Docker IPs (172.17.x, 10.x.x) - never advertise these to gossipsub
 	if config.SettingsObj.PublicIP != "" {
 		publicAddr, err := ma.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", config.SettingsObj.PublicIP, config.SettingsObj.LocalCollectorP2PPort))
 		if err != nil {
 			log.Errorf("Failed to create public multiaddr: %v", err)
 		} else {
 			opts = append(opts, libp2p.AddrsFactory(func(addrs []ma.Multiaddr) []ma.Multiaddr {
-				// Add the public address to the list - this is what gets advertised in DHT
-				return append(addrs, publicAddr)
+				// Filter out internal/reserved addresses - Docker IPs must not be advertised
+				filtered, _ := FilterRFC1918Multiaddrs(addrs)
+				// Add the public address - this is what gets advertised in DHT/gossipsub
+				return append(filtered, publicAddr)
 			}))
-			log.Debugf("Advertising public IP %s on port %s in DHT", config.SettingsObj.PublicIP, config.SettingsObj.LocalCollectorP2PPort)
+			log.Debugf("Advertising public IP %s on port %s in DHT (internal addresses filtered)", config.SettingsObj.PublicIP, config.SettingsObj.LocalCollectorP2PPort)
 		}
 	}
 
