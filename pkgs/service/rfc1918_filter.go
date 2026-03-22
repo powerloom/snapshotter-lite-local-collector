@@ -8,7 +8,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
-	log "github.com/sirupsen/logrus"
 )
 
 // Reserved IP ranges that should be blocked
@@ -69,10 +68,6 @@ func FilterRFC1918Multiaddrs(addrs []ma.Multiaddr) ([]ma.Multiaddr, int) {
 		}
 
 		filtered = append(filtered, addr)
-	}
-
-	if filteredCount > 0 {
-		log.Infof("Filtered %d reserved IP addresses from peer addresses (RFC1918/RFC6598/RFC2544)", filteredCount)
 	}
 
 	return filtered, filteredCount
