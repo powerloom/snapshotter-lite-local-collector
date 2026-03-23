@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"proto-snapshot-server/config"
+	"strings"
 	"sync"
 
 	logging "github.com/ipfs/go-log/v2"
@@ -43,9 +44,18 @@ func InitializeService() error {
 		return nil
 	}
 
-	// Set libp2p logging to debug
-	logging.SetAllLoggers(logging.LevelInfo)
-	logger.Debug("Libp2p logging set to info level")
+	// go-log (libp2p internals): align with LOG_LEVEL so swarm/security traces show when debugging.
+	gologLevel := logging.LevelInfo
+	switch strings.ToLower(strings.TrimSpace(config.SettingsObj.LogLevel)) {
+	case "debug", "trace":
+		gologLevel = logging.LevelDebug
+	case "warn", "warning":
+		gologLevel = logging.LevelWarn
+	case "error", "fatal", "panic":
+		gologLevel = logging.LevelError
+	}
+	logging.SetAllLoggers(gologLevel)
+	log.Infof("Libp2p (go-log) global level: %s (from LOG_LEVEL=%s)", gologLevel, config.SettingsObj.LogLevel)
 
 	// Always create P2P host (needed for gossipsub mesh submissions)
 	if P2PHost == nil {
