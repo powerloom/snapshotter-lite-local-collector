@@ -91,11 +91,13 @@ func InitializeService() error {
 
 	var err error
 
-	// Get standardized gossipsub parameters for snapshot submissions mesh
-	gossipParams, peerScoreParams, peerScoreThresholds, paramHash := gossipconfig.ConfigureSnapshotSubmissionsMesh(deps.hostConn.ID())
+	// Same as DSV: peer-score Topics must use env discovery + submissions topic strings (prefix/0 and prefix/all).
+	discoveryTopic, submissionsTopic := config.SettingsObj.GetSnapshotSubmissionTopics()
+	gossipParams, peerScoreParams, peerScoreThresholds, paramHash := gossipconfig.ConfigureSnapshotSubmissionsMesh(
+		deps.hostConn.ID(), discoveryTopic, submissionsTopic)
 
 	log.Info("Using standardized gossipsub mesh parameters from gossipconfig package")
-	log.Infof("🔑 Gossipsub parameter hash: %s (local collector)", paramHash)
+	log.Infof("🔑 Gossipsub parameter hash: %s (local collector); topics: %s | %s", paramHash, discoveryTopic, submissionsTopic)
 
 	// Configure gossipsub with standardized parameters matching other components
 	gossiper, err = pubsub.NewGossipSub(
