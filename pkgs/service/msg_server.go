@@ -41,6 +41,9 @@ const (
 	MeshStatePruned   MeshState = "pruned"
 )
 
+// meshStartupGracePeriod delays CRITICAL mesh / zero-peer publish logs while gossipsub grafts after cold start.
+const meshStartupGracePeriod = 120 * time.Second
+
 // MeshHealthMetrics tracks mesh health over time
 type MeshHealthMetrics struct {
 	State                    MeshState
@@ -688,7 +691,7 @@ func (s *server) publishToMesh(submission *pkgs.SnapshotSubmission) {
 			totalPeers := len(deps.hostConn.Network().Peers())
 			metrics := s.GetMeshHealthMetrics()
 
-			log.WithFields(log.Fields{
+			pubFields := log.Fields{
 				"topic":                topicString,
 				"total_connected":      totalPeers,
 				"mesh_state":           metrics.State,
@@ -696,7 +699,12 @@ func (s *server) publishToMesh(submission *pkgs.SnapshotSubmission) {
 				"total_pruning_events": metrics.TotalPruningEvents,
 				"uptime_seconds":       int(metrics.Uptime.Seconds()),
 				"host_id":              deps.hostConn.ID().String(),
-			}).Error("🚨 CRITICAL: Publishing to gossipsub with 0 peers in topic mesh - messages will not propagate!")
+			}
+			if metrics.Uptime < meshStartupGracePeriod {
+				log.WithFields(pubFields).Debug("Publishing with no topic mesh peers yet (startup grace)")
+			} else {
+				log.WithFields(pubFields).Error("🚨 CRITICAL: Publishing to gossipsub with 0 peers in topic mesh - messages will not propagate!")
+			}
 
 			// Trigger lifecycle hook for zero-peer publish attempt
 			s.triggerMeshLifecycleHook("zero_peer_publish_attempt", metrics)
@@ -1638,7 +1646,6 @@ func (s *server) monitorMeshStatus() {
 		// CRITICAL: Detect and recover from pruning
 		if discoveryPeers == 0 || submissionPeers == 0 {
 			// Gossipsub graft/mesh can take tens of seconds after host start; avoid false CRITICAL alarms.
-			const meshStartupGrace = 120 * time.Second
 			fields := log.Fields{
 				"discovery_peers":      discoveryPeers,
 				"submission_peers":     submissionPeers,
@@ -1649,7 +1656,7 @@ func (s *server) monitorMeshStatus() {
 				"uptime_seconds":       int(metrics.Uptime.Seconds()),
 				"state":                metrics.State,
 			}
-			if metrics.Uptime < meshStartupGrace {
+			if metrics.Uptime < meshStartupGracePeriod {
 				log.WithFields(fields).Debug("Mesh still forming after startup (grace period) — no gossipsub topic peers yet")
 			} else {
 				log.WithFields(fields).Error("🚨 CRITICAL: Mesh pruned - no peers in gossipsub mesh!")

@@ -225,13 +225,13 @@ func CreateLibP2pHost() error {
 		if err != nil {
 			log.Errorf("Failed to create public multiaddr: %v", err)
 		} else {
-			opts = append(opts, libp2p.AddrsFactory(func(addrs []ma.Multiaddr) []ma.Multiaddr {
-				// Filter out internal/reserved addresses - Docker IPs must not be advertised
-				filtered, _ := FilterRFC1918Multiaddrs(addrs)
-				// Add the public address - this is what gets advertised in DHT/gossipsub
-				return append(filtered, publicAddr)
+			// Advertise ONLY the configured public address. Merging with libp2p-observed listen/NAT
+			// addresses leaks 127.0.0.1, docker LAN, and ephemeral ports into the DHT (breaks remote dials).
+			opts = append(opts, libp2p.AddrsFactory(func(_ []ma.Multiaddr) []ma.Multiaddr {
+				return []ma.Multiaddr{publicAddr}
 			}))
-			log.Debugf("Advertising public IP %s on port %s in DHT (internal addresses filtered)", config.SettingsObj.PublicIP, config.SettingsObj.LocalCollectorP2PPort)
+			log.Infof("DHT will advertise only /ip4/%s/tcp/%s (PUBLIC_IP set; omitting local/observed addrs that poison peer records)",
+				config.SettingsObj.PublicIP, config.SettingsObj.LocalCollectorP2PPort)
 		}
 	}
 
