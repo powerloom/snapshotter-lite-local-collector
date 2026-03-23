@@ -8,6 +8,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
+	log "github.com/sirupsen/logrus"
 )
 
 // Reserved IP ranges that should be blocked
@@ -123,7 +124,7 @@ func (g *RFC1918ConnectionGater) InterceptPeerDial(p peer.ID) (allow bool) {
 // InterceptAddrDial blocks dialing to reserved IP addresses
 func (g *RFC1918ConnectionGater) InterceptAddrDial(pid peer.ID, addr ma.Multiaddr) (allow bool) {
 	if HasRFC1918Address(addr) {
-		// Silently block - this is expected behavior and logging would be too noisy
+		log.Debugf("connection gater: block outbound dial peer=%s addr=%s", pid, addr.String())
 		return false
 	}
 	return true
@@ -135,8 +136,7 @@ func (g *RFC1918ConnectionGater) InterceptAddrDial(pid peer.ID, addr ma.Multiadd
 func (g *RFC1918ConnectionGater) InterceptAccept(conn network.ConnMultiaddrs) (allow bool) {
 	remoteAddr := conn.RemoteMultiaddr()
 	if HasRFC1918Address(remoteAddr) {
-		// Silently reject - don't log to avoid spam
-		// This prevents TCP RST responses that Hetzner flags as abuse
+		log.Infof("connection gater: reject inbound (InterceptAccept) remote=%s", remoteAddr.String())
 		return false
 	}
 	return true
@@ -146,7 +146,7 @@ func (g *RFC1918ConnectionGater) InterceptAccept(conn network.ConnMultiaddrs) (a
 func (g *RFC1918ConnectionGater) InterceptSecured(direction network.Direction, pid peer.ID, conn network.ConnMultiaddrs) (allow bool) {
 	remoteAddr := conn.RemoteMultiaddr()
 	if HasRFC1918Address(remoteAddr) {
-		// Silently block - this is expected behavior and logging would be too noisy
+		log.Infof("connection gater: reject secured (InterceptSecured) dir=%v peer=%s remote=%s", direction, pid, remoteAddr.String())
 		return false
 	}
 	return true
@@ -156,7 +156,7 @@ func (g *RFC1918ConnectionGater) InterceptSecured(direction network.Direction, p
 func (g *RFC1918ConnectionGater) InterceptUpgraded(conn network.Conn) (allow bool, reason control.DisconnectReason) {
 	remoteAddr := conn.RemoteMultiaddr()
 	if HasRFC1918Address(remoteAddr) {
-		// Silently block - this is expected behavior and logging would be too noisy
+		log.Infof("connection gater: reject upgraded (InterceptUpgraded) remote=%s", remoteAddr.String())
 		return false, control.DisconnectReason(0) // No specific reason needed
 	}
 	return true, control.DisconnectReason(0)
