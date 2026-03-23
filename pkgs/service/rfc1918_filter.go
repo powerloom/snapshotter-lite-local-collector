@@ -45,6 +45,22 @@ func IsRFC1918(ip net.IP) bool {
 	return IsReservedIP(ip) // Now includes all reserved ranges
 }
 
+// isIPv4UnsuitableForPublicMesh is true for addresses that must not be advertised in the DHT
+// (loopback, link-local e.g. 169.254.x.x, and RFC1918/CGNAT/benchmark ranges).
+func isIPv4UnsuitableForPublicMesh(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	ipv4 := ip.To4()
+	if ipv4 == nil {
+		return false
+	}
+	if ipv4.IsLoopback() || ipv4.IsLinkLocalUnicast() {
+		return true
+	}
+	return IsReservedIP(ipv4)
+}
+
 // FilterRFC1918Multiaddrs filters out multiaddrs with reserved IP addresses
 // Returns the filtered list and count of filtered addresses
 func FilterRFC1918Multiaddrs(addrs []ma.Multiaddr) ([]ma.Multiaddr, int) {
@@ -62,7 +78,7 @@ func FilterRFC1918Multiaddrs(addrs []ma.Multiaddr) ([]ma.Multiaddr, int) {
 			return true // Continue iteration
 		})
 
-		if ip != nil && IsReservedIP(ip) {
+		if ip != nil && isIPv4UnsuitableForPublicMesh(ip) {
 			filteredCount++
 			continue
 		}
@@ -89,7 +105,7 @@ func HasRFC1918Address(addr ma.Multiaddr) bool {
 		return false
 	}
 
-	return IsReservedIP(ip)
+	return isIPv4UnsuitableForPublicMesh(ip)
 }
 
 // RFC1918ConnectionGater blocks connections to reserved IP addresses

@@ -1637,7 +1637,9 @@ func (s *server) monitorMeshStatus() {
 
 		// CRITICAL: Detect and recover from pruning
 		if discoveryPeers == 0 || submissionPeers == 0 {
-			log.WithFields(log.Fields{
+			// Gossipsub graft/mesh can take tens of seconds after host start; avoid false CRITICAL alarms.
+			const meshStartupGrace = 120 * time.Second
+			fields := log.Fields{
 				"discovery_peers":      discoveryPeers,
 				"submission_peers":     submissionPeers,
 				"total_connected":      totalConnectedPeers,
@@ -1646,7 +1648,12 @@ func (s *server) monitorMeshStatus() {
 				"last_pruning_time":    metrics.LastPruningTime,
 				"uptime_seconds":       int(metrics.Uptime.Seconds()),
 				"state":                metrics.State,
-			}).Error("🚨 CRITICAL: Mesh pruned - no peers in gossipsub mesh!")
+			}
+			if metrics.Uptime < meshStartupGrace {
+				log.WithFields(fields).Debug("Mesh still forming after startup (grace period) — no gossipsub topic peers yet")
+			} else {
+				log.WithFields(fields).Error("🚨 CRITICAL: Mesh pruned - no peers in gossipsub mesh!")
+			}
 
 			// Attempt recovery if it's been at least 30 seconds since last attempt
 			if time.Since(lastRecoveryAttempt) > 30*time.Second {
