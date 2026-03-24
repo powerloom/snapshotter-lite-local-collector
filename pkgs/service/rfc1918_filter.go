@@ -2,6 +2,8 @@ package service
 
 import (
 	"net"
+	"os"
+	"strings"
 
 	"github.com/libp2p/go-libp2p/core/connmgr"
 	"github.com/libp2p/go-libp2p/core/control"
@@ -109,11 +111,58 @@ func HasRFC1918Address(addr ma.Multiaddr) bool {
 	return isIPv4UnsuitableForPublicMesh(ip)
 }
 
-// RFC1918ConnectionGater blocks connections to reserved IP addresses
-// This includes RFC1918, RFC6598 (CGNAT), and RFC2544 (Benchmark) ranges
-// This is required by Hetzner to prevent scanning of internal networks
-// CRITICAL: InterceptAccept prevents TCP RST responses to incoming connection attempts
-type RFC1918ConnectionGater struct{}
+// RFC1918ConnectionGater blocks connections to reserved IP addresses.
+// Hetzner requirement: prevent outbound scanning of internal networks.
+// In Docker bridge mode, all inbound connections appear from the bridge gateway
+// (e.g. 172.21.0.1), so we whitelist configured gateway IPs to avoid rejecting
+// legitimate public peers whose source IP was rewritten by Docker NAT.
+type RFC1918ConnectionGater struct {
+	dockerBridgeGateways []net.IP
+}
+
+// NewRFC1918ConnectionGater reads DOCKER_BRIDGE_GATEWAY_IPS (comma-separated)
+// and whitelists those IPs in InterceptAccept / InterceptSecured / InterceptUpgraded.
+// Example: DOCKER_BRIDGE_GATEWAY_IPS=172.21.0.1
+func NewRFC1918ConnectionGater() *RFC1918ConnectionGater {
+	gater := &RFC1918ConnectionGater{}
+	if gwStr := os.Getenv("DOCKER_BRIDGE_GATEWAY_IPS"); gwStr != "" {
+		for _, s := range strings.Split(gwStr, ",") {
+			s = strings.TrimSpace(s)
+			if ip := net.ParseIP(s); ip != nil {
+				gater.dockerBridgeGateways = append(gater.dockerBridgeGateways, ip)
+				log.Infof("connection gater: whitelisting Docker bridge gateway %s for inbound connections", s)
+			}
+		}
+	}
+	return gater
+}
+
+func (g *RFC1918ConnectionGater) isWhitelistedGateway(addr ma.Multiaddr) bool {
+	if len(g.dockerBridgeGateways) == 0 {
+		return false
+	}
+	var ip net.IP
+	ma.ForEach(addr, func(c ma.Component) bool {
+		if c.Protocol().Code == ma.P_IP4 {
+			ip = net.IP(c.RawValue())
+			return false
+		}
+		return true
+	})
+	if ip == nil {
+		return false
+	}
+	ipv4 := ip.To4()
+	if ipv4 == nil {
+		return false
+	}
+	for _, gw := range g.dockerBridgeGateways {
+		if gw.To4().Equal(ipv4) {
+			return true
+		}
+	}
+	return false
+}
 
 // InterceptPeerDial blocks dialing to peers with RFC1918 addresses
 func (g *RFC1918ConnectionGater) InterceptPeerDial(p peer.ID) (allow bool) {
@@ -130,11 +179,11 @@ func (g *RFC1918ConnectionGater) InterceptAddrDial(pid peer.ID, addr ma.Multiadd
 	return true
 }
 
-// InterceptAccept blocks incoming connections from reserved IP addresses
-// CRITICAL: This prevents TCP RST responses to incoming connection attempts from reserved IPs
-// Hetzner detects these RST packets as abuse, so we must silently reject at this layer
 func (g *RFC1918ConnectionGater) InterceptAccept(conn network.ConnMultiaddrs) (allow bool) {
 	remoteAddr := conn.RemoteMultiaddr()
+	if g.isWhitelistedGateway(remoteAddr) {
+		return true
+	}
 	if HasRFC1918Address(remoteAddr) {
 		log.Infof("connection gater: reject inbound (InterceptAccept) remote=%s", remoteAddr.String())
 		return false
@@ -142,9 +191,11 @@ func (g *RFC1918ConnectionGater) InterceptAccept(conn network.ConnMultiaddrs) (a
 	return true
 }
 
-// InterceptSecured blocks secured connections to reserved IP addresses
 func (g *RFC1918ConnectionGater) InterceptSecured(direction network.Direction, pid peer.ID, conn network.ConnMultiaddrs) (allow bool) {
 	remoteAddr := conn.RemoteMultiaddr()
+	if g.isWhitelistedGateway(remoteAddr) {
+		return true
+	}
 	if HasRFC1918Address(remoteAddr) {
 		log.Infof("connection gater: reject secured (InterceptSecured) dir=%v peer=%s remote=%s", direction, pid, remoteAddr.String())
 		return false
@@ -152,12 +203,14 @@ func (g *RFC1918ConnectionGater) InterceptSecured(direction network.Direction, p
 	return true
 }
 
-// InterceptUpgraded blocks upgraded connections to reserved IP addresses
 func (g *RFC1918ConnectionGater) InterceptUpgraded(conn network.Conn) (allow bool, reason control.DisconnectReason) {
 	remoteAddr := conn.RemoteMultiaddr()
+	if g.isWhitelistedGateway(remoteAddr) {
+		return true, control.DisconnectReason(0)
+	}
 	if HasRFC1918Address(remoteAddr) {
 		log.Infof("connection gater: reject upgraded (InterceptUpgraded) remote=%s", remoteAddr.String())
-		return false, control.DisconnectReason(0) // No specific reason needed
+		return false, control.DisconnectReason(0)
 	}
 	return true, control.DisconnectReason(0)
 }

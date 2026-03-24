@@ -122,6 +122,7 @@ Key environment variables:
 - `CONN_MANAGER_LOW_WATER`: Connection manager low water mark
 - `CONN_MANAGER_HIGH_WATER`: Connection manager high water mark
 - `WRITE_SEMAPHORE_TIMEOUT_SEC`: Timeout for semaphore acquisition (default: 5)
+- `DOCKER_BRIDGE_GATEWAY_IPS`: Comma-separated Docker bridge gateway IPs to whitelist for inbound connections (required in Docker bridge mode — see below)
 
 ### Centralized Sequencer Configuration
 
@@ -606,6 +607,25 @@ All mesh-related logs include these fields:
 - **Cannot connect to bootstrap nodes**: Verify `BOOTSTRAP_NODE_ADDRS` are correct and nodes are reachable
 - **No peers in gossipsub mesh**: Check DHT bootstrap status and rendezvous point configuration
 - **Stream pool connection failures**: Verify centralized sequencer endpoint configuration
+
+### Docker Bridge NAT and RFC1918 Connection Gater
+
+When running in Docker bridge networking mode (the default), Docker NAT rewrites the source IP of **all** inbound TCP connections to the bridge gateway IP (e.g. `172.21.0.1`). The RFC1918 connection gater sees this private IP and rejects the connection at `InterceptAccept`, before the libp2p security handshake starts. The remote peer sees `failed to negotiate security protocol: EOF`.
+
+**Symptoms:**
+- Logs show: `connection gater: reject inbound (InterceptAccept) remote=/ip4/172.x.x.1/tcp/...`
+- Remote peers see: `failed to negotiate security protocol: EOF` or `dial backoff`
+
+**Fix:** Set `DOCKER_BRIDGE_GATEWAY_IPS` to the gateway IP of the Docker network the container is attached to:
+```bash
+# Find the gateway IP
+docker network inspect <network-name> | grep Gateway
+
+# Add to .env
+DOCKER_BRIDGE_GATEWAY_IPS=172.21.0.1
+```
+
+This whitelists the gateway IP in the connection gater for inbound connections only. Outbound blocking of private IPs (required by Hetzner) is unaffected.
 
 ### Mesh Pruning Issues
 

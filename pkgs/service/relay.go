@@ -141,14 +141,12 @@ func CreateLibP2pHost() error {
 		return err
 	}
 
-	// Create RFC1918 connection gater to block private IP connections
-	// This is required by Hetzner to prevent scanning of internal networks
-	rfc1918Gater := &RFC1918ConnectionGater{}
+	rfc1918Gater := NewRFC1918ConnectionGater()
 
 	opts := []libp2p.Option{
 		libp2p.EnableRelay(),
 		libp2p.ConnectionManager(ConnManager),
-		libp2p.ConnectionGater(rfc1918Gater), // Block RFC1918 connections at dial level
+		libp2p.ConnectionGater(rfc1918Gater),
 		libp2p.ListenAddrs(TcpAddr),
 		libp2p.ResourceManager(rm),
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
